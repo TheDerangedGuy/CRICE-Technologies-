@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set Up Two-Factor Auth – CRICE Lab</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-box">
+    <div class="auth-logo">CRICE Lab</div>
+    <div class="auth-sub">Secure your account</div>
+    <div class="auth-title">Set up two-factor authentication</div>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <div class="alert alert-info">
+      Two-factor authentication is required for all CRICE Lab accounts.
+      Scan the QR code with an authenticator app (e.g. Google Authenticator, Authy),
+      then enter the 6-digit code to confirm.
+    </div>
+
+    <div class="qr-wrap">
+      <img src="data:image/png;base64,{{ qr_b64 }}" alt="TOTP QR Code" width="200" height="200">
+    </div>
+
+    <p class="text-muted text-sm" style="word-break:break-all;margin-bottom:1rem;">
+      Can't scan? Enter this URI manually in your app:<br>
+      <code class="font-mono" style="font-size:10px;">{{ totp_uri }}</code>
+    </p>
+
+    <form method="post" action="/mfa/setup">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="form-group">
+        <label for="totp_code">Enter the 6-digit code to confirm</label>
+        <input type="text" id="totp_code" name="totp_code"
+               inputmode="numeric" pattern="[0-9]{6}"
+               autocomplete="one-time-code"
+               maxlength="6" required autofocus placeholder="000000"
+               style="letter-spacing:.2em;font-size:1.4rem;text-align:center;">
+      </div>
+      <button type="submit" class="btn btn-success" style="width:100%;justify-content:center;">
+        Activate two-factor auth →
+      </button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

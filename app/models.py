@@ -1,17 +1,18 @@
 """
 app/models.py – SQLAlchemy ORM models for M1.
 
+Uses the classic Column() API (not Mapped[]) for Python 3.14 compatibility
+with SQLAlchemy 2.0.35.
+
 All enums use native_enum=False (stored as VARCHAR) so the same models
 work with both PostgreSQL (production) and SQLite (tests).
-
-All datetime defaults are Python-side lambdas (not server_default) so
-they work in SQLite too.
+All datetime defaults are Python-side lambdas for SQLite compatibility.
 """
 import datetime
 import enum
 
 import sqlalchemy as sa
-import sqlalchemy.orm as orm
+from sqlalchemy.orm import relationship
 
 from app.db import Base
 
@@ -50,13 +51,10 @@ class StageEnum(str, enum.Enum):
 
 
 # Ordered list used by advance_case() to validate one-step forward movement.
-STAGE_ORDER: list[StageEnum] = list(StageEnum)
+STAGE_ORDER = list(StageEnum)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _now() -> datetime.datetime:
+def _now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
@@ -66,120 +64,73 @@ def _now() -> datetime.datetime:
 class User(Base):
     __tablename__ = "users"
 
-    id: orm.Mapped[int] = orm.mapped_column(sa.Integer, primary_key=True)
-    email: orm.Mapped[str] = orm.mapped_column(
-        sa.String(254), unique=True, nullable=False, index=True
-    )
-    full_name: orm.Mapped[str] = orm.mapped_column(sa.String(200), nullable=False)
-    password_hash: orm.Mapped[str] = orm.mapped_column(sa.String(200), nullable=False)
-    role: orm.Mapped[str] = orm.mapped_column(
-        sa.Enum(UserRole, native_enum=False, length=30), nullable=False
-    )
-    totp_secret: orm.Mapped[str | None] = orm.mapped_column(
-        sa.String(64), nullable=True
-    )
-    mfa_enabled: orm.Mapped[bool] = orm.mapped_column(
-        sa.Boolean, default=False, nullable=False
-    )
-    is_active: orm.Mapped[bool] = orm.mapped_column(
-        sa.Boolean, default=True, nullable=False
-    )
-    failed_logins: orm.Mapped[int] = orm.mapped_column(
-        sa.Integer, default=0, nullable=False
-    )
-    locked_until: orm.Mapped[datetime.datetime | None] = orm.mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
-    created_at: orm.Mapped[datetime.datetime] = orm.mapped_column(
-        sa.DateTime(timezone=True), default=_now, nullable=False
-    )
+    id = sa.Column(sa.Integer, primary_key=True)
+    email = sa.Column(sa.String(254), unique=True, nullable=False, index=True)
+    full_name = sa.Column(sa.String(200), nullable=False)
+    password_hash = sa.Column(sa.String(200), nullable=False)
+    role = sa.Column(sa.Enum(UserRole, native_enum=False, length=30), nullable=False)
+    totp_secret = sa.Column(sa.String(64), nullable=True)
+    mfa_enabled = sa.Column(sa.Boolean, default=False, nullable=False)
+    is_active = sa.Column(sa.Boolean, default=True, nullable=False)
+    failed_logins = sa.Column(sa.Integer, default=0, nullable=False)
+    locked_until = sa.Column(sa.DateTime(timezone=True), nullable=True)
+    created_at = sa.Column(sa.DateTime(timezone=True), default=_now, nullable=False)
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         return f"<User id={self.id} email={self.email!r} role={self.role}>"
 
 
 class Case(Base):
     __tablename__ = "cases"
 
-    id: orm.Mapped[int] = orm.mapped_column(sa.Integer, primary_key=True)
-    case_ref: orm.Mapped[str] = orm.mapped_column(
-        sa.String(20), unique=True, nullable=False, index=True
-    )
-    client_name: orm.Mapped[str] = orm.mapped_column(sa.String(200), nullable=False)
-    purpose: orm.Mapped[str] = orm.mapped_column(
+    id = sa.Column(sa.Integer, primary_key=True)
+    case_ref = sa.Column(sa.String(20), unique=True, nullable=False, index=True)
+    client_name = sa.Column(sa.String(200), nullable=False)
+    purpose = sa.Column(
         sa.Enum(PurposeEnum, native_enum=False, length=50), nullable=False
     )
-    subject_type: orm.Mapped[str] = orm.mapped_column(
+    subject_type = sa.Column(
         sa.Enum(SubjectType, native_enum=False, length=20), nullable=False
     )
-    subject_name: orm.Mapped[str] = orm.mapped_column(sa.String(200), nullable=False)
-    subject_identifier: orm.Mapped[str | None] = orm.mapped_column(
-        sa.String(50), nullable=True
-    )
-    stage: orm.Mapped[str] = orm.mapped_column(
+    subject_name = sa.Column(sa.String(200), nullable=False)
+    subject_identifier = sa.Column(sa.String(50), nullable=True)
+    stage = sa.Column(
         sa.Enum(StageEnum, native_enum=False, length=20),
         default=StageEnum.INTAKE,
         nullable=False,
     )
-    intake_approved: orm.Mapped[bool] = orm.mapped_column(
-        sa.Boolean, default=False, nullable=False
-    )
-    operator_id: orm.Mapped[int] = orm.mapped_column(
-        sa.Integer, sa.ForeignKey("users.id"), nullable=False
-    )
-    reviewer_id: orm.Mapped[int | None] = orm.mapped_column(
-        sa.Integer, sa.ForeignKey("users.id"), nullable=True
-    )
-    created_by: orm.Mapped[int] = orm.mapped_column(
-        sa.Integer, sa.ForeignKey("users.id"), nullable=False
-    )
-    created_at: orm.Mapped[datetime.datetime] = orm.mapped_column(
-        sa.DateTime(timezone=True), default=_now, nullable=False
-    )
-    updated_at: orm.Mapped[datetime.datetime] = orm.mapped_column(
+    intake_approved = sa.Column(sa.Boolean, default=False, nullable=False)
+    operator_id = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=False)
+    reviewer_id = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=True)
+    created_by = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=False)
+    created_at = sa.Column(sa.DateTime(timezone=True), default=_now, nullable=False)
+    updated_at = sa.Column(
         sa.DateTime(timezone=True), default=_now, onupdate=_now, nullable=False
     )
 
-    # Relationships
-    operator: orm.Mapped["User"] = orm.relationship(
-        "User", foreign_keys=[operator_id], lazy="select"
-    )
-    reviewer: orm.Mapped["User | None"] = orm.relationship(
-        "User", foreign_keys=[reviewer_id], lazy="select"
-    )
-    creator: orm.Mapped["User"] = orm.relationship(
-        "User", foreign_keys=[created_by], lazy="select"
-    )
+    operator = relationship("User", foreign_keys=[operator_id], lazy="select")
+    reviewer = relationship("User", foreign_keys=[reviewer_id], lazy="select")
+    creator = relationship("User", foreign_keys=[created_by], lazy="select")
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         return f"<Case {self.case_ref!r} stage={self.stage}>"
 
 
 class AuditLog(Base):
-    """Append-only audit log.  No UPDATE or DELETE paths exist anywhere in the codebase."""
+    """Append-only audit log. No UPDATE or DELETE paths exist anywhere in the codebase."""
 
     __tablename__ = "audit_log"
 
-    id: orm.Mapped[int] = orm.mapped_column(sa.Integer, primary_key=True)
-    timestamp: orm.Mapped[datetime.datetime] = orm.mapped_column(
-        sa.DateTime(timezone=True), default=_now, nullable=False
-    )
-    user_id: orm.Mapped[int | None] = orm.mapped_column(
-        sa.Integer, sa.ForeignKey("users.id"), nullable=True
-    )
-    case_id: orm.Mapped[int | None] = orm.mapped_column(
-        sa.Integer, sa.ForeignKey("cases.id"), nullable=True
-    )
-    action: orm.Mapped[str] = orm.mapped_column(sa.String(100), nullable=False)
-    detail: orm.Mapped[dict | None] = orm.mapped_column(sa.JSON, nullable=True)
-    ip: orm.Mapped[str | None] = orm.mapped_column(sa.String(45), nullable=True)
+    id = sa.Column(sa.Integer, primary_key=True)
+    timestamp = sa.Column(sa.DateTime(timezone=True), default=_now, nullable=False)
+    user_id = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=True)
+    case_id = sa.Column(sa.Integer, sa.ForeignKey("cases.id"), nullable=True)
+    action = sa.Column(sa.String(100), nullable=False)
+    detail = sa.Column(sa.JSON, nullable=True)
+    ip = sa.Column(sa.String(45), nullable=True)
 
-    user: orm.Mapped["User | None"] = orm.relationship(
-        "User", foreign_keys=[user_id], lazy="select"
-    )
-    case: orm.Mapped["Case | None"] = orm.relationship(
-        "Case", foreign_keys=[case_id], lazy="select"
-    )
+    user = relationship("User", foreign_keys=[user_id], lazy="select")
+    case = relationship("Case", foreign_keys=[case_id], lazy="select")
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         return f"<AuditLog id={self.id} action={self.action!r}>"

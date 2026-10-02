@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Two-Factor Auth – CRICE Lab</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-box">
+    <div class="auth-logo">CRICE Lab</div>
+    <div class="auth-sub">Two-factor authentication</div>
+    <div class="auth-title">Enter your authenticator code</div>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <p class="text-muted text-sm mb-3">
+      Open your authenticator app and enter the 6-digit code for <strong>CRICE Lab</strong>.
+    </p>
+
+    <form method="post" action="/mfa">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="form-group">
+        <label for="totp_code">One-time code</label>
+        <input type="text" id="totp_code" name="totp_code"
+               inputmode="numeric" pattern="[0-9]{6}"
+               autocomplete="one-time-code"
+               maxlength="6" required autofocus placeholder="000000"
+               style="letter-spacing:.2em;font-size:1.4rem;text-align:center;">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;">
+        Verify →
+      </button>
+    </form>
+
+    <p class="text-muted text-sm mt-3" style="text-align:center;">
+      <a href="/logout">Sign in with a different account</a>
+    </p>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign In – CRICE Lab</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-box">
+    <div class="auth-logo">CRICE Lab</div>
+    <div class="auth-sub">Cyber Reconnaissance &amp; Intelligence Correlation Engine</div>
+    <div class="auth-title">Sign in to your account</div>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <div class="form-group">
+        <label for="email">Work email</label>
+        <input type="email" id="email" name="email" autocomplete="username"
+               required autofocus placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password"
+               required placeholder="••••••••">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;">
+        Continue →
+      </button>
+    </form>
+
+    <p class="text-muted text-sm mt-3" style="text-align:center;">
+      You will be asked for a one-time code on the next step.
+    </p>
+  </div>
+</div>
+</body>
+</html>

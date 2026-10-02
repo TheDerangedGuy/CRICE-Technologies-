@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}CRICE Lab{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+{% if current_user %}
+<nav class="navbar">
+  <a class="brand" href="/cases">CRICE Lab</a>
+  <a href="/cases">Cases</a>
+  {% if current_user.role == 'compliance_admin' %}
+  <a href="/admin/users">Admin</a>
+  <a href="/audit">Audit Log</a>
+  {% endif %}
+  <span class="spacer"></span>
+  <span class="user-info">{{ current_user.full_name }} &middot; {{ current_user.role }}</span>
+  <a href="/logout">Sign out</a>
+</nav>
+{% endif %}
+
+{% block body %}{% endblock %}
+
+<script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
+</body>
+</html>

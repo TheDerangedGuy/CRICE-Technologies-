@@ -1,29 +1,36 @@
 """
 app/main.py – FastAPI application factory.
-Routers are added progressively as sub-packages are implemented.
 """
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
+from app.auth.middleware import SessionMiddleware
+from app.auth import routes as auth_routes
+from app.cases import routes as cases_routes
+
 app = FastAPI(
     title="CRICE Lab",
-    # Disable automatic interactive docs (no external access needed in M1)
     docs_url=None,
     redoc_url=None,
 )
+
+# ── Middleware ────────────────────────────────────────────────────────────────
+app.add_middleware(SessionMiddleware)
 
 # ── Static files ─────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
+# ── Routers ───────────────────────────────────────────────────────────────────
+app.include_router(auth_routes.router)
+app.include_router(cases_routes.router)
 
 # ── Exception handlers ────────────────────────────────────────────────────────
 
 @app.exception_handler(401)
 async def auth_required_handler(request: Request, exc) -> RedirectResponse:
-    """Any 401 from a dependency → redirect to login."""
     return RedirectResponse(url="/login", status_code=302)
 
 
