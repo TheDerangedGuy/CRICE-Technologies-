@@ -1,42 +1,48 @@
 """
 app/auth/routes.py – login, MFA, and logout routes.
 
-Flow:
-  1. GET /login          → password form
-  2. POST /login         → verify password → partial session (mfa=False) → redirect to /mfa or /mfa/setup
-  3. GET /mfa            → TOTP entry form
-  4. POST /mfa           → verify TOTP → full session (mfa=True) → redirect to /cases
-  5. GET /mfa/setup      → show QR code + confirm first TOTP (only when mfa_enabled=False)
-  6. POST /mfa/setup     → verify TOTP → set mfa_enabled=True → full session → redirect to /cases
-  7. GET /logout         → clear cookie → redirect to /login
-
-Lockout: 5 consecutive bad passwords → locked_until = now + 15 min.
-CSRF: every state-changing POST checks the _csrf form field against
-      the "csrf" value embedded in the signed session cookie.
+Security hardening per approved plan:
+  - Generic error messages (no user enumeration)
+  - TOTP replay protection (totp_used table)
+  - Encrypted TOTP secrets (Fernet)
+  - Server-side sessions (opaque cookie ← session_id only)
+  - CSRF token checked on every state-changing POST
+  - Pending-MFA sessions grant no access to protected routes
 """
-import base64
 import datetime
 import io
-from typing import Optional, Union
+import base64
+from typing import Optional
 
 import pyotp
 import qrcode
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import app.config as config
 from app.audit.writer import log_action
 from app.auth.password import verify_password
-from app.auth.sessions import create_session_token
+from app.auth.sessions import (
+    COOKIE_NAME,
+    create_session,
+    load_session,
+    promote_to_mfa,
+    revoke_session,
+    set_session_cookie,
+    clear_session_cookie,
+)
+from app.auth.totp_crypto import encrypt_totp_secret, decrypt_totp_secret
 from app.db import get_db
-from app.models import User
+from app.models import Session as SessionModel, TotpUsed, User
 from app.templates_config import templates
 
 router = APIRouter(tags=["auth"])
 
 _LOCKOUT_ATTEMPTS = config.LOCKOUT_ATTEMPTS
 _LOCKOUT_DURATION = datetime.timedelta(minutes=config.LOCKOUT_MINUTES)
+_GENERIC_LOGIN_ERROR = "Invalid email or password."
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -46,8 +52,10 @@ def _ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _session(request: Request) -> Optional[dict]:
-    return getattr(request.state, "session", None)
+def _get_sess(request: Request, db: Session) -> Optional[SessionModel]:
+    """Load the current session row from the DI DB session."""
+    sid: Optional[str] = getattr(request.state, "session_id", None)
+    return load_session(db, sid)
 
 
 def _render(
@@ -55,23 +63,16 @@ def _render(
     template: str,
     ctx: dict,
     status: int = 200,
+    sess: Optional[SessionModel] = None,
 ) -> HTMLResponse:
-    sess = _session(request)
     ctx.setdefault("request", request)
     ctx.setdefault("current_user", None)
-    ctx.setdefault("csrf_token", sess.get("csrf", "") if sess else "")
+    ctx.setdefault("csrf_token", sess.csrf_token if sess else "")
     return templates.TemplateResponse(template, ctx, status_code=status)
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
-    response.set_cookie(
-        "session",
-        token,
-        httponly=True,
-        samesite="lax",
-        secure=config.SECURE_COOKIES,
-        max_age=config.SESSION_MAX_AGE,
-    )
+def _csrf_ok(sess: Optional[SessionModel], submitted: str) -> bool:
+    return bool(sess and submitted == sess.csrf_token)
 
 
 def _make_qr_b64(uri: str) -> str:
@@ -81,19 +82,30 @@ def _make_qr_b64(uri: str) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def _csrf_ok(request: Request, submitted_token: str) -> bool:
-    sess = _session(request)
-    return bool(sess and submitted_token == sess.get("csrf"))
+def _record_totp_use(db: Session, user_id: int, code: str) -> bool:
+    """Return True if the code is fresh; False if replayed. Prunes old entries."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(seconds=90)
+    db.query(TotpUsed).filter(
+        TotpUsed.user_id == user_id, TotpUsed.used_at < cutoff
+    ).delete()
+    try:
+        db.add(TotpUsed(user_id=user_id, code=code, used_at=now))
+        db.flush()
+        return True
+    except IntegrityError:
+        db.rollback()
+        return False
 
 
 # ── GET /login ────────────────────────────────────────────────────────────────
 
 
 @router.get("/login", response_model=None)
-def login_get(request: Request) -> Response:
-    sess = _session(request)
+def login_get(request: Request, db: Session = Depends(get_db)) -> Response:
+    sess = _get_sess(request, db)
     if sess:
-        if sess.get("mfa"):
+        if sess.mfa_verified:
             return RedirectResponse("/cases", status_code=302)
         return RedirectResponse("/mfa", status_code=302)
     return _render(request, "auth/login.html", {"error": None})
@@ -112,15 +124,14 @@ async def login_post(
     ip = _ip(request)
     now = datetime.datetime.now(datetime.timezone.utc)
 
-    user: Optional[User] = db.query(User).filter(
-        User.email == email.strip().lower()
-    ).first()
+    def _bad() -> Response:
+        return _render(request, "auth/login.html", {"error": _GENERIC_LOGIN_ERROR}, 401)
 
-    def _bad_creds() -> Response:
-        return _render(request, "auth/login.html", {"error": "Invalid email or password."}, 401)
-
+    user: Optional[User] = (
+        db.query(User).filter(User.email == email.strip().lower()).first()
+    )
     if not user or not user.is_active:
-        return _bad_creds()
+        return _bad()
 
     # Lockout check
     if user.locked_until:
@@ -128,13 +139,9 @@ async def login_post(
         if lu.tzinfo is None:
             lu = lu.replace(tzinfo=datetime.timezone.utc)
         if lu > now:
-            mins = int((lu - now).total_seconds() / 60) + 1
-            return _render(
-                request,
-                "auth/login.html",
-                {"error": f"Account locked. Try again in {mins} minute(s)."},
-                401,
-            )
+            mins = max(1, int((lu - now).total_seconds() / 60) + 1)
+            return _render(request, "auth/login.html",
+                           {"error": f"Account locked. Try again in {mins} minute(s)."}, 401)
 
     # Password check
     if not verify_password(user.password_hash, password):
@@ -142,26 +149,20 @@ async def login_post(
         if user.failed_logins >= _LOCKOUT_ATTEMPTS:
             user.locked_until = now + _LOCKOUT_DURATION
             db.flush()
-            log_action(
-                db,
-                action="account_locked",
-                user_id=user.id,
-                detail={"reason": "Too many failed login attempts"},
-                ip=ip,
-            )
+            log_action(db, action="account_locked", user_id=user.id,
+                       detail={"reason": "Too many failed login attempts"}, ip=ip)
         db.commit()
-        return _bad_creds()
+        return _bad()
 
-    # Password OK – reset counters
+    # Password OK
     user.failed_logins = 0
     user.locked_until = None
-    db.commit()
+    db.flush()
 
-    # Issue partial session (mfa not yet complete)
-    token = create_session_token(user.id, mfa_ok=False)
+    session_id, _csrf = create_session(db, user.id, mfa_verified=False)
     dest = "/mfa" if user.mfa_enabled else "/mfa/setup"
     resp = RedirectResponse(dest, status_code=302)
-    _set_session_cookie(resp, token)
+    set_session_cookie(resp, session_id)
     return resp
 
 
@@ -170,15 +171,15 @@ async def login_post(
 
 @router.get("/mfa", response_model=None)
 def mfa_get(request: Request, db: Session = Depends(get_db)) -> Response:
-    sess = _session(request)
+    sess = _get_sess(request, db)
     if not sess:
         return RedirectResponse("/login", status_code=302)
-    if sess.get("mfa"):
+    if sess.mfa_verified:
         return RedirectResponse("/cases", status_code=302)
-    user: Optional[User] = db.get(User, sess["uid"])
+    user: Optional[User] = db.get(User, sess.user_id)
     if not user or not user.mfa_enabled:
         return RedirectResponse("/mfa/setup", status_code=302)
-    return _render(request, "auth/mfa.html", {"error": None})
+    return _render(request, "auth/mfa.html", {"error": None}, sess=sess)
 
 
 # ── POST /mfa ─────────────────────────────────────────────────────────────────
@@ -191,29 +192,35 @@ async def mfa_post(
     csrf_token: str = Form(default="", alias="_csrf"),
     db: Session = Depends(get_db),
 ) -> Response:
-    sess = _session(request)
-    if not sess or sess.get("mfa"):
+    sess = _get_sess(request, db)
+    if not sess or sess.mfa_verified:
         return RedirectResponse("/login", status_code=302)
 
-    if not _csrf_ok(request, csrf_token):
+    if not _csrf_ok(sess, csrf_token):
         return _render(request, "auth/mfa.html",
-                       {"error": "Security check failed. Please try again."}, 403)
+                       {"error": "Security check failed. Please try again."}, 403, sess=sess)
 
-    user: Optional[User] = db.get(User, sess["uid"])
-    if not user or not user.totp_secret:
+    user: Optional[User] = db.get(User, sess.user_id)
+    if not user or not user.totp_secret_enc:
         return RedirectResponse("/login", status_code=302)
 
-    totp = pyotp.TOTP(user.totp_secret)
-    if not totp.verify(totp_code.strip(), valid_window=1):
-        return _render(request, "auth/mfa.html", {"error": "Invalid code. Please try again."}, 401)
+    plain = decrypt_totp_secret(user.totp_secret_enc)
+    totp = pyotp.TOTP(plain)
+    code = totp_code.strip()
 
+    if not totp.verify(code, valid_window=1):
+        log_action(db, action="mfa_failed", user_id=user.id, ip=_ip(request))
+        db.commit()
+        return _render(request, "auth/mfa.html", {"error": "Invalid code. Please try again."}, 401, sess=sess)
+
+    if not _record_totp_use(db, user.id, code):
+        return _render(request, "auth/mfa.html",
+                       {"error": "Code already used. Please wait for the next code."}, 401, sess=sess)
+
+    promote_to_mfa(db, sess)
     log_action(db, action="login", user_id=user.id, detail={"method": "totp"}, ip=_ip(request))
     db.commit()
-
-    new_token = create_session_token(user.id, mfa_ok=True)
-    resp = RedirectResponse("/cases", status_code=302)
-    _set_session_cookie(resp, new_token)
-    return resp
+    return RedirectResponse("/cases", status_code=302)
 
 
 # ── GET /mfa/setup ────────────────────────────────────────────────────────────
@@ -221,26 +228,27 @@ async def mfa_post(
 
 @router.get("/mfa/setup", response_model=None)
 def mfa_setup_get(request: Request, db: Session = Depends(get_db)) -> Response:
-    sess = _session(request)
+    sess = _get_sess(request, db)
     if not sess:
         return RedirectResponse("/login", status_code=302)
-    if sess.get("mfa"):
+    if sess.mfa_verified:
         return RedirectResponse("/cases", status_code=302)
-    user: Optional[User] = db.get(User, sess["uid"])
+    user: Optional[User] = db.get(User, sess.user_id)
     if not user:
         return RedirectResponse("/login", status_code=302)
     if user.mfa_enabled:
         return RedirectResponse("/mfa", status_code=302)
 
-    if not user.totp_secret:
-        user.totp_secret = pyotp.random_base32()
+    if not user.totp_secret_enc:
+        plain = pyotp.random_base32()
+        user.totp_secret_enc = encrypt_totp_secret(plain)
         db.commit()
+    else:
+        plain = decrypt_totp_secret(user.totp_secret_enc)
 
-    uri = pyotp.TOTP(user.totp_secret).provisioning_uri(
-        name=user.email, issuer_name="CRICE Lab"
-    )
+    uri = pyotp.TOTP(plain).provisioning_uri(name=user.email, issuer_name="CRICE Lab")
     return _render(request, "auth/mfa_setup.html",
-                   {"totp_uri": uri, "qr_b64": _make_qr_b64(uri), "error": None})
+                   {"totp_uri": uri, "qr_b64": _make_qr_b64(uri), "error": None}, sess=sess)
 
 
 # ── POST /mfa/setup ───────────────────────────────────────────────────────────
@@ -253,36 +261,40 @@ async def mfa_setup_post(
     csrf_token: str = Form(default="", alias="_csrf"),
     db: Session = Depends(get_db),
 ) -> Response:
-    sess = _session(request)
-    if not sess or sess.get("mfa"):
+    sess = _get_sess(request, db)
+    if not sess or sess.mfa_verified:
         return RedirectResponse("/login", status_code=302)
 
-    if not _csrf_ok(request, csrf_token):
+    if not _csrf_ok(sess, csrf_token):
         return RedirectResponse("/mfa/setup", status_code=302)
 
-    user: Optional[User] = db.get(User, sess["uid"])
-    if not user or not user.totp_secret:
+    user: Optional[User] = db.get(User, sess.user_id)
+    if not user or not user.totp_secret_enc:
         return RedirectResponse("/login", status_code=302)
 
-    totp = pyotp.TOTP(user.totp_secret)
-    if not totp.verify(totp_code.strip(), valid_window=1):
+    plain = decrypt_totp_secret(user.totp_secret_enc)
+    totp = pyotp.TOTP(plain)
+    code = totp_code.strip()
+
+    if not totp.verify(code, valid_window=1):
         uri = totp.provisioning_uri(name=user.email, issuer_name="CRICE Lab")
-        return _render(
-            request,
-            "auth/mfa_setup.html",
-            {"totp_uri": uri, "qr_b64": _make_qr_b64(uri),
-             "error": "Invalid code. Please scan the QR code and try again."},
-            401,
-        )
+        return _render(request, "auth/mfa_setup.html",
+                       {"totp_uri": uri, "qr_b64": _make_qr_b64(uri),
+                        "error": "Invalid code. Please scan the QR code and try again."}, 401, sess=sess)
+
+    if not _record_totp_use(db, user.id, code):
+        uri = pyotp.TOTP(plain).provisioning_uri(name=user.email, issuer_name="CRICE Lab")
+        return _render(request, "auth/mfa_setup.html",
+                       {"totp_uri": uri, "qr_b64": _make_qr_b64(uri),
+                        "error": "Code already used. Please wait for the next code."}, 401, sess=sess)
 
     user.mfa_enabled = True
-    log_action(db, action="mfa_enabled", user_id=user.id, detail={"method": "totp_setup"}, ip=_ip(request))
+    db.flush()
+    promote_to_mfa(db, sess)
+    log_action(db, action="mfa_enabled", user_id=user.id,
+               detail={"method": "totp_setup"}, ip=_ip(request))
     db.commit()
-
-    new_token = create_session_token(user.id, mfa_ok=True)
-    resp = RedirectResponse("/cases", status_code=302)
-    _set_session_cookie(resp, new_token)
-    return resp
+    return RedirectResponse("/cases", status_code=302)
 
 
 # ── GET /logout ───────────────────────────────────────────────────────────────
@@ -290,10 +302,12 @@ async def mfa_setup_post(
 
 @router.get("/logout", response_model=None)
 def logout(request: Request, db: Session = Depends(get_db)) -> Response:
-    sess = _session(request)
-    if sess and sess.get("mfa"):
-        log_action(db, action="logout", user_id=sess["uid"], ip=_ip(request))
-        db.commit()
+    sess = _get_sess(request, db)
+    if sess:
+        if sess.mfa_verified:
+            log_action(db, action="logout", user_id=sess.user_id, ip=_ip(request))
+        revoke_session(db, sess)
+
     resp = RedirectResponse("/login", status_code=302)
-    resp.delete_cookie("session")
+    clear_session_cookie(resp)
     return resp
