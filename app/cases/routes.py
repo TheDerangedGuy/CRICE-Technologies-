@@ -80,6 +80,7 @@ def cases_list(
             .all()
         )
     return templates.TemplateResponse(
+        request,
         "cases/list.html",
         {
             "request": request,
@@ -102,6 +103,7 @@ def cases_new_get(
 ) -> Response:
     sess = _get_sess(request, db)
     return templates.TemplateResponse(
+        request,
         "cases/new.html",
         {
             "request": request,
@@ -136,6 +138,7 @@ async def cases_new_post(
 
     if not _csrf_ok(request, csrf_token, db):
         return templates.TemplateResponse(
+            request,
             "cases/new.html",
             {
                 "request": request,
@@ -163,6 +166,7 @@ async def cases_new_post(
         )
     except HTTPException as exc:
         return templates.TemplateResponse(
+            request,
             "cases/new.html",
             {
                 "request": request,
@@ -281,6 +285,7 @@ def case_workspace(
         can_advance = False
 
     return templates.TemplateResponse(
+        request,
         "cases/workspace.html",
         {
             "request": request,
@@ -530,6 +535,7 @@ def case_feed_get(
         .all()
     )
     return templates.TemplateResponse(
+        request,
         "cases/_feed.html",
         {
             "request": request,

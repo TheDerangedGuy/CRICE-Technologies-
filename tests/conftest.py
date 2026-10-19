@@ -112,13 +112,24 @@ def db(engine):
     session.close()
 
 
+class CRICETestClient(TestClient):
+    """TestClient subclass that sets cookies directly on the client instance to avoid HTTPX deprecation warnings."""
+
+    def request(self, method, url, **kwargs):
+        if "cookies" in kwargs and kwargs["cookies"] is not None:
+            cookies = kwargs.pop("cookies")
+            self.cookies.clear()
+            self.cookies.update(cookies)
+        return super().request(method, url, **kwargs)
+
+
 @pytest.fixture(scope="function")
 def client(db):
     def _override():
         yield db
 
     app.dependency_overrides[get_db] = _override
-    with TestClient(app, raise_server_exceptions=True) as c:
+    with CRICETestClient(app, raise_server_exceptions=True) as c:
         yield c
     app.dependency_overrides.clear()
 

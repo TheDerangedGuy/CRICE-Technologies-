@@ -68,7 +68,7 @@ def _render(
     ctx.setdefault("request", request)
     ctx.setdefault("current_user", None)
     ctx.setdefault("csrf_token", sess.csrf_token if sess else "")
-    return templates.TemplateResponse(template, ctx, status_code=status)
+    return templates.TemplateResponse(request, template, ctx, status_code=status)
 
 
 def _csrf_ok(sess: Optional[SessionModel], submitted: str) -> bool:
