@@ -17,6 +17,7 @@ os.environ["SESSION_ABSOLUTE_SECONDS"] = "86400"
 
 # ── Now import app modules ────────────────────────────────────────────────────
 import secrets
+from typing import Optional, Union
 
 import pyotp
 import pytest
@@ -31,6 +32,7 @@ from app.db import Base, get_db
 from app.main import app
 from app.models import (
     Case,
+    CaseStage,
     PurposeEnum,
     Session as SessionModel,
     StageEnum,
@@ -105,7 +107,6 @@ def make_user(
         is_active=is_active,
         failed_logins=0,
     )
-    # Store plaintext TOTP for test assertions
     user._totp_plain = totp_plain  # type: ignore[attr-defined]
     db.add(user)
     db.commit()
@@ -117,18 +118,36 @@ def make_case(
     db,
     operator: User,
     subject_type: SubjectType = SubjectType.company,
-    stage: StageEnum = StageEnum.INTAKE,
-    intake_approved: bool = True,
-    reviewer: User | None = None,
+    stage: Union[CaseStage, str] = CaseStage.INTAKE_DRAFT,
+    intake_approved: bool = False,
+    client_name: str = "Test Client Ltd",
+    client_kyc_verified: bool = True,
+    msa_signed: bool = True,
+    purpose: PurposeEnum = PurposeEnum.corporate_due_diligence,
+    subject_name: str = "Target Corp",
+    subject_identifier: Optional[str] = "U72200MH2018PTC123456",
+    reviewer: Optional[User] = None,
+    consent_verified: bool = False,
+    dossier_version: int = 1,
+    is_recalled: bool = False,
+    rework_reason: Optional[str] = None,
 ) -> Case:
+    stage_val = stage.value if isinstance(stage, CaseStage) else str(stage)
     case = Case(
         case_ref=f"CRICE-{secrets.token_hex(4).upper()}",
-        client_name="Test Client Ltd",
-        purpose=PurposeEnum.corporate_due_diligence.value,
-        subject_type=subject_type.value,
-        subject_name="Target Corp",
-        stage=stage.value,
+        client_name=client_name,
+        client_kyc_verified=client_kyc_verified,
+        msa_signed=msa_signed,
+        purpose=purpose.value if isinstance(purpose, PurposeEnum) else purpose,
+        subject_type=subject_type.value if isinstance(subject_type, SubjectType) else subject_type,
+        subject_name=subject_name,
+        subject_identifier=subject_identifier,
+        stage=stage_val,
         intake_approved=intake_approved,
+        consent_verified=consent_verified,
+        dossier_version=dossier_version,
+        is_recalled=is_recalled,
+        rework_reason=rework_reason,
         operator_id=operator.id,
         reviewer_id=reviewer.id if reviewer else None,
         created_by=operator.id,

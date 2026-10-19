@@ -1,21 +1,30 @@
-# CRICE Lab: SPEC.md (Milestone 1: Skeleton)
+# CRICE Lab: SPEC.md (Milestone 1: Hardened DAG Skeleton)
 
-CRICE = Cyber Reconnaissance & Intelligence Correlation Engine. The lab is a credential-login web app where operators move **cases** through a fixed 7-stage workflow with human gates. This spec covers Milestone 1 only. Do not build anything listed under "Out of scope."
+CRICE = Cyber Reconnaissance & Intelligence Correlation Engine. The lab is a credential-login web app where operators move **cases** through an auditable, deterministic Directed Acyclic Graph (DAG) workflow with human compliance gates, bilateral separation of duties, and audited rework/recall loops.
+
+This spec covers Milestone 1 only. Do not build anything listed under "Out of scope."
+
+---
 
 ## Principles (apply to every milestone)
-1. Every screen works end to end with real data. No dummy buttons.
-2. The system tells the operator the next action. One primary button per screen; plain-language labels; empty states and errors say what to do.
-3. Stage rules are enforced **server-side**, never only in the UI.
-4. Every state change writes to the audit log.
-5. Development uses demo data only (listed companies, own entity). No real client or private-individual data.
+1. **Real Data End-to-End**: Every screen works with real database records. No dummy or non-functional UI buttons.
+2. **Deterministic Operator Guidance**: The system displays a plain-language "NEXT ACTION" banner on each stage view. One primary action button per screen for the authorized role. Empty states and errors state clearly what action is required.
+3. **Strict Server-Side Enforcement**: All stage transition rules, role checks, rework justifications, and compliance gates are enforced inside atomic database transactions in the service layer, never only in client-side HTML/JS.
+4. **Comprehensive, Immutable Auditability**: Every state change, access attempt, approval, denial, rework loop, and recall writes to an append-only `audit_log` table protected by a PostgreSQL trigger blocking `UPDATE` and `DELETE`. Denied attempts (`allowed = False`) are committed to the audit log even when an exception is raised to the caller.
+5. **Bilateral Separation of Duties**: An operator who operates or creates a case can never act as its reviewer (`operator_id != reviewer_id`). This rule is enforced in both application code and via a database constraint.
+6. **B2B Client Governance**: Cases cannot be drafted or advanced without a verified active client record (`client_kyc_verified = True`, `msa_signed = True`).
+
+---
 
 ## Stack
-- Python 3.12, FastAPI, Jinja2 templates + HTMX (no React).
-- PostgreSQL (docker-compose for local), SQLAlchemy 2.x + Alembic migrations.
-- Auth: argon2 password hashing, TOTP MFA (pyotp), signed HttpOnly session cookies, CSRF protection.
-- Tests: pytest. Config via `.env` (provide `.env.example`; never commit secrets).
+- Python 3.12+ (tested on Python 3.14), FastAPI, Jinja2 templates + HTMX (no React).
+- PostgreSQL 16+ (docker-compose for local), SQLAlchemy 2.x + Alembic migrations. SQLite with foreign keys enabled for test suite.
+- Auth: Argon2id password hashing, TOTP MFA (`pyotp`) with Fernet-encrypted secrets at rest, TOTP replay protection, signed HttpOnly server-side session cookies, CSRF protection on all mutating endpoints.
+- Tests: `pytest` with TestClient. Config via `.env` (never commit secrets).
 
-## Repo layout
+---
+
+## Repo Layout
 ```
 crice/
   app/
@@ -23,74 +32,187 @@ crice/
     config.py
     db.py
     models.py
-    auth/        (login, mfa, sessions, roles)
-    cases/       (routes, service.py = ALL stage logic)
+    cli.py
+    auth/        (login, mfa, sessions, roles, crypto)
+    cases/       (routes, service.py = DAG state machine)
     audit/       (log writer, viewer)
     admin/       (user management)
-    templates/
-    static/
-  migrations/
-  tests/
-  docs/SOP/      (one page per stage; written by the founder)
+    templates/   (base, auth, cases, admin, audit)
+    static/      (style.css)
+  migrations/    (alembic migrations with PostgreSQL immutability trigger)
+  tests/         (test_auth.py, test_cases.py, test_audit.py, conftest.py)
+  docs/SOP/      (operator standard operating procedures)
   docker-compose.yml
   README.md
   SPEC.md
+  CRICE.md
   .env.example
   .gitignore
 ```
 
+---
+
 ## Roles
-- `operator`: creates and works cases.
-- `reviewer`: reviews work; cannot be the case's operator for the same case.
-- `compliance_admin`: approves person-subject intake, manages users, releases dossiers, views full audit log.
+- `operator`: creates cases, performs collection, extracts claims, conducts correlation, builds dossiers.
+- `reviewer`: conducts independent review; cannot be the operator of the same case (`reviewer_id != operator_id`).
+- `compliance_admin`: approves person-subject intake, assigns reviewers, releases dossiers, triggers recalls, manages users, views complete audit log.
 
-## Data model (M1)
-**users**: id, email (unique), full_name, password_hash, role, totp_secret, mfa_enabled, is_active, failed_logins, locked_until, created_at.
+---
 
-**cases**: id, case_ref (format `CRICE-` + 8 uppercase hex, unique), client_name, purpose (enum), subject_type (`company` | `person`), subject_name, subject_identifier (CIN or DIN, optional), stage (enum), intake_approved (bool, default false), operator_id, created_by, created_at, updated_at.
+## Data Model (M1)
 
-**audit_log** (append-only): id, timestamp, user_id, case_id (nullable), action, detail (JSON), ip. No update or delete code paths exist for this table.
+### `users`
+- `id`: integer PK
+- `email`: varchar(254), unique index
+- `full_name`: varchar(200)
+- `password_hash`: varchar(200)
+- `role`: varchar(30), check constraint in (`operator`, `reviewer`, `compliance_admin`)
+- `totp_secret_enc`: text nullable (Fernet encrypted)
+- `mfa_enabled`: boolean, default false
+- `is_active`: boolean, default true
+- `failed_logins`: integer, default 0
+- `locked_until`: timestamp with time zone, nullable
+- `created_at`: timestamp with time zone
 
-**Enums**
-- `purpose`: corporate_due_diligence, litigation_support, vendor_verification, employee_screening_with_consent, fraud_investigation.
-- `stage`: INTAKE, COLLECT, PRE_AI_REVIEW, AI_PROCESSING, POST_AI_REVIEW, BUILD, RELEASE, CLOSED.
+### `sessions`
+- `id`: integer PK
+- `session_id`: varchar(64), unique index
+- `user_id`: integer FK -> users.id
+- `mfa_verified`: boolean, default false
+- `csrf_token`: varchar(64)
+- `last_active_at`: timestamp with time zone
+- `created_at`: timestamp with time zone
+- `revoked`: boolean, default false
 
-## Stage rules (single function `advance_case(case, user, to_stage)` in `cases/service.py`)
-- Only forward by one step. No skipping. No going back in M1.
-- INTAKE → COLLECT: requires `intake_approved = true`. Company subjects are auto-approved. Person subjects require approval by `compliance_admin`.
-- Other transitions in M1: the assigned operator may advance; each writes an audit entry. (Real gates arrive in later milestones.)
-- RELEASE → CLOSED: `compliance_admin` only.
-- Any rule violation returns a clear message ("This case needs compliance approval before collection can start.") and writes a `denied` audit entry.
+### `totp_used`
+- `id`: integer PK
+- `user_id`: integer FK -> users.id
+- `code`: varchar(6)
+- `used_at`: timestamp with time zone
+- Unique constraint: (`user_id`, `code`)
 
-## Screens
-1. **Login** (email, password, then TOTP). Lockout after 5 failed attempts for 15 minutes.
-2. **Case list**: queue grouped by stage, showing case_ref, subject, client, stage, operator. Primary button: "New case". Empty state: "No cases yet. Click New case to start."
-3. **New case (Intake)**: fields above; purpose is a dropdown; plain-language help text under each field.
-4. **Case workspace**: stage bar across the top (current stage highlighted), case summary, one primary action button for the current stage, and a case-scoped activity feed.
-5. **Admin** (compliance_admin): create users, set role, deactivate, reset MFA.
-6. **Audit viewer** (compliance_admin): filter by case, user, action; export CSV.
+### `cases`
+- `id`: integer PK
+- `case_ref`: varchar(14), format `^CRICE-[0-9A-F]{8}$`, unique index
+- `client_name`: varchar(200)
+- `client_kyc_verified`: boolean, default false
+- `msa_signed`: boolean, default false
+- `purpose`: varchar(50), enum
+- `subject_type`: varchar(20), check in (`company`, `person`)
+- `subject_name`: varchar(200)
+- `subject_identifier`: varchar(50), nullable (Company MCA CIN or Person DIN/ID)
+- `stage`: varchar(30), check in valid 10-stage list
+- `intake_approved`: boolean, default false
+- `consent_verified`: boolean, default false
+- `dossier_version`: integer, default 1
+- `is_recalled`: boolean, default false
+- `rework_reason`: text, nullable
+- `operator_id`: integer FK -> users.id
+- `reviewer_id`: integer nullable FK -> users.id
+- `created_by`: integer FK -> users.id
+- `created_at`: timestamp with time zone
+- `updated_at`: timestamp with time zone
+- Table Check: `reviewer_id IS NULL OR operator_id != reviewer_id`
 
-## Seeding and first run
-- `python -m app.cli create-admin` creates the first compliance_admin interactively. **No default passwords anywhere.**
-- `python -m app.cli seed-demo` creates 2 demo cases (a listed company and the CRICE entity) so the app is usable on first run.
-- README must document: clone, `.env`, `docker compose up -d`, migrate, create-admin, run.
+### `audit_log` (Append-Only)
+- `id`: integer PK
+- `timestamp`: timestamp with time zone
+- `user_id`: integer nullable FK -> users.id
+- `case_id`: integer nullable FK -> cases.id
+- `action`: varchar(100)
+- `from_stage`: varchar(30), nullable
+- `to_stage`: varchar(30), nullable
+- `allowed`: boolean, default true
+- `detail`: JSON nullable
+- `ip`: varchar(45), nullable
+- *Database trigger: blocks all UPDATE and DELETE operations.*
 
-## Acceptance tests (pytest; all must pass)
-1. A user cannot reach any page without logging in and passing MFA.
-2. Five failed logins lock the account.
-3. A case cannot skip a stage.
-4. A person-subject case cannot leave INTAKE until compliance approves.
-5. An operator cannot close a case; only compliance_admin can.
-6. Every successful and denied transition creates an audit entry.
-7. Audit entries cannot be modified or deleted through any route.
-8. A reviewer cannot be set as reviewer on a case they operate.
-9. `case_ref` is unique and matches the `CRICE-XXXXXXXX` format.
+---
 
-## Definition of done
-A non-builder reads `docs/SOP/00-quickstart.md`, logs in, creates a case, and walks it from INTAKE to CLOSED using only the SOP, and every action appears in the audit log.
+## Enums
+- **`purpose`**: `corporate_due_diligence`, `litigation_support`, `vendor_verification`, `employee_screening_with_consent`, `fraud_investigation`.
+- **`subject_type`**: `company`, `person`.
+- **`CaseStage`**:
+  1. `INTAKE_DRAFT`
+  2. `COMPLIANCE_GATE`
+  3. `COLLECT`
+  4. `CLAIM_EXTRACTION`
+  5. `CORRELATION_AND_SCORING`
+  6. `INDEPENDENT_REVIEW`
+  7. `BUILD_AND_QA`
+  8. `RELEASE_GATE`
+  9. `CLOSED`
+  10. `RECALLED`
 
-## Out of scope for M1 (do not build)
-Source collection, evidence storage, AI calls, claims, dossier PDF, secure delivery links, file uploads, any scraping, email sending.
+---
 
-## Instruction to the build agent
-Build against this spec only. Work in small commits. Run the tests after each task. If anything in the spec is ambiguous, stop and list the question instead of guessing. Do not add features, libraries, or screens that aren't listed.
+## Stage Rules & Transition Matrix (`app/cases/service.py`)
+
+All stage transitions are processed through `transition_case(case, user, to_stage, db, ip, reason=None)`:
+
+1. **`INTAKE_DRAFT` -> `COLLECT` (Auto-advance)**:
+   - Permitted if `subject_type == 'company'` AND `purpose` in (`corporate_due_diligence`, `litigation_support`, `vendor_verification`) AND `client_kyc_verified == True` AND `msa_signed == True`.
+   - `intake_approved` is set to `True`.
+2. **`INTAKE_DRAFT` -> `COMPLIANCE_GATE`**:
+   - Required if `subject_type == 'person'`, OR `purpose == 'fraud_investigation'`, OR `purpose == 'employee_screening_with_consent'`.
+3. **`COMPLIANCE_GATE` -> `COLLECT`**:
+   - `compliance_admin` only.
+   - If `purpose == 'employee_screening_with_consent'`, requires `consent_verified == True`.
+   - Sets `intake_approved = True`.
+4. **M1 Pass-Through Stages (`COLLECT`, `CLAIM_EXTRACTION`, `CORRELATION_AND_SCORING`, `BUILD_AND_QA`)**:
+   - In Milestone 1, stages 3, 4, 5, and 7 allow forward progression by the assigned operator or `compliance_admin` without backing records/claims rows.
+5. **Entering & Completing `INDEPENDENT_REVIEW`**:
+   - Entering requires `cases.reviewer_id IS NOT NULL` and `reviewer_id != operator_id`.
+   - Forward advance (`INDEPENDENT_REVIEW` -> `BUILD_AND_QA`) is permitted **only** to the assigned reviewer (`reviewer_id == user.id`).
+6. **Rework Loops (Backward Transitions)**:
+   - `INDEPENDENT_REVIEW` -> `COLLECT` or `CORRELATION_AND_SCORING` (actor: assigned reviewer).
+   - `RELEASE_GATE` -> `BUILD_AND_QA` or `INDEPENDENT_REVIEW` (actor: `compliance_admin`).
+   - Every backward transition requires a mandatory `rework_reason` ($\ge 10$ characters).
+7. **`RELEASE_GATE` -> `CLOSED`**:
+   - `compliance_admin` only.
+8. **Recall Transition (`CLOSED` -> `RECALLED` -> `COLLECT` or `INDEPENDENT_REVIEW`)**:
+   - `compliance_admin` only.
+   - Requires mandatory `rework_reason` ($\ge 10$ characters).
+   - Sets `is_recalled = True` and increments `dossier_version` ($1 \rightarrow 2$).
+9. **Audit Trail**:
+   - Every transition attempt writes an `audit_log` row with `from_stage`, `to_stage`, and `allowed = True/False`.
+   - Denied transitions commit the audit log before raising HTTP 400 or 403.
+
+---
+
+## Screens & UI Standards
+- **Swiss-Modernist Visual Discipline**: Strictly monochrome/greys, high-contrast monospace metadata (`CRICE-XXXXXXXX`), zero decorative clutter.
+- **Explicit Disambiguation Labels**: Clear distinction between **"Case Ref (CIN)"** and **"Company MCA CIN"**.
+- **Next Action Banner**: Shows the current state and plain-language instructions on what is needed to advance.
+- **Role-Gated Controls**: Action buttons are disabled or hidden when the viewing user is not authorized, with clear explanatory text (e.g., *"Awaiting Compliance Admin approval"* or *"Locked for Independent Review"*).
+- **Rework & Recall Modals**: Clean forms with required reason fields.
+
+---
+
+## Acceptance Tests (pytest; all must pass)
+1. Protected pages require full authenticated session with MFA.
+2. Five failed logins trigger 15-minute account lockout.
+3. Account lockout rejects subsequent attempts until window expires.
+4. Correct password resets failed login counter.
+5. Inactive users and pending-MFA sessions are rejected.
+6. Generic error message on bad credentials prevents user enumeration.
+7. CSRF tokens enforced on state-changing requests.
+8. TOTP replay protection prevents code reuse.
+9. Session revocation on logout invalidates cookie immediately.
+10. `case_ref` is unique and matches `^CRICE-[0-9A-F]{8}$`.
+11. Company intake with valid KYC/MSA auto-advances to `COLLECT`.
+12. Person intake halts at `COMPLIANCE_GATE` and blocks operator advance.
+13. `employee_screening_with_consent` halts until `consent_verified = True`.
+14. Stage skipping is blocked and logged as `allowed = False` in `audit_log`.
+15. `operator_id != reviewer_id` enforced in DB constraint and service layer.
+16. Non-assigned users cannot advance `INDEPENDENT_REVIEW`.
+17. Reviewer rework requires reason $\ge 10$ chars and moves case backward.
+18. Operator cannot close case; only `compliance_admin` can advance `RELEASE_GATE` -> `CLOSED`.
+19. `compliance_admin` can recall a closed case, which increments `dossier_version` and sets `is_recalled = True`.
+20. Audit log trigger prevents `UPDATE` and `DELETE` at the database level.
+21. Every successful and denied transition writes an `audit_log` row.
+
+---
+
+## Out of Scope for M1
+Live source collection, evidence blob storage, LLM API calls, atomic claims table, dossier PDF generation, secure delivery links, file uploads, web scraping.

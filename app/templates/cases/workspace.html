@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% block title %}{{ case.case_ref }} – CRICE Lab{% endblock %}
+{% block body %}
+<div class="container">
+
+  {# ── Stage Progress Bar ───────────────────────────────────── #}
+  <div class="stage-bar">
+    {% set current_idx = STAGE_ORDER.index(case.stage) if case.stage in STAGE_ORDER else 0 %}
+    {% for stage in STAGE_ORDER %}
+    {% set idx = loop.index0 %}
+    <div class="stage-item {% if idx < current_idx and case.stage != 'RECALLED' %}done{% elif stage == case.stage %}current{% endif %}">
+      {{ stage | replace('_', ' ') }}
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── Recall Notice ────────────────────────────────────────── #}
+  {% if case.is_recalled %}
+  <div class="alert alert-warning" style="border-left:4px solid #b45309;">
+    <strong>⚠ DOSSIER RECALLED (Version v{{ case.dossier_version }}.0):</strong>
+    This case was recalled post-release. Prior delivery links are revoked.
+    {% if case.rework_reason %}
+    <br><span class="text-xs">Reason: {{ case.rework_reason }}</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div style="display:grid;grid-template-columns:1fr 340px;gap:1.5rem;align-items:start;">
+
+    {# ── Left Column: Case Details & Workflow Action ─────────── #}
+    <div>
+
+      {# ── Summary Card ───────────────────────────────────────── #}
+      <div class="card">
+        <div class="flex justify-between items-center mb-3">
+          <div>
+            <div class="font-mono" style="font-size:20px;font-weight:900;letter-spacing:.03em;">
+              {{ case.case_ref }}
+              <span class="badge" style="font-size:12px;margin-left:.5rem;">v{{ case.dossier_version }}.0</span>
+              {% set stage_slug = case.stage | lower | replace('_', '-') %}
+              <span class="badge badge-{{ stage_slug }}" style="font-size:12px;margin-left:.25rem;">{{ case.stage | replace('_', ' ') }}</span>
+            </div>
+            <div class="text-muted text-sm mt-1">Client: <strong>{{ case.client_name }}</strong></div>
+          </div>
+          <a href="/cases" class="btn btn-secondary btn-sm">← Back to Cases</a>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem 1.5rem;background:#f8fafc;padding:1rem;border-radius:6px;border:1px solid #e2e8f0;">
+          <div>
+            <div class="section-label" style="margin-top:0;">Subject Type</div>
+            <div><strong>{{ case.subject_type | upper }}</strong></div>
+          </div>
+          <div>
+            <div class="section-label" style="margin-top:0;">Subject Name</div>
+            <div><strong>{{ case.subject_name }}</strong></div>
+          </div>
+          {% if case.subject_identifier %}
+          <div>
+            <div class="section-label">Subject Registry CIN / ID</div>
+            <div class="font-mono text-sm">{{ case.subject_identifier }}</div>
+          </div>
+          {% endif %}
+          <div>
+            <div class="section-label">Permissible Purpose</div>
+            <div>{{ case.purpose | replace('_', ' ') | title }}</div>
+          </div>
+          <div>
+            <div class="section-label">Client Governance</div>
+            <div class="text-xs">
+              {% if case.client_kyc_verified and case.msa_signed %}
+              <span style="color:#15803d;font-weight:700;">✓ KYC & MSA Verified</span>
+              {% else %}
+              <span style="color:#b45309;font-weight:700;">⚠ KYC/MSA Pending</span>
+              {% endif %}
+            </div>
+          </div>
+          <div>
+            <div class="section-label">Assigned Operator</div>
+            <div>{{ case.operator.full_name if case.operator else '—' }}</div>
+          </div>
+          <div>
+            <div class="section-label">Assigned Reviewer</div>
+            <div>{{ case.reviewer.full_name if case.reviewer else '<span class="text-muted text-xs">Unassigned</span>' | safe }}</div>
+          </div>
+          {% if case.purpose == PurposeEnum.employee_screening_with_consent.value %}
+          <div>
+            <div class="section-label">Consent Token</div>
+            <div>
+              {% if case.consent_verified %}
+              <span style="color:#15803d;font-weight:700;">✓ Verified</span>
+              {% else %}
+              <span style="color:#b45309;font-weight:700;">⏳ Pending Verification</span>
+              {% endif %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+
+        {# ── Compliance Admin Actions: Reviewer & Consent ────── #}
+        {% if is_admin %}
+        <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid #e2e8f0;">
+          <div class="section-label" style="margin-top:0;">Compliance Administration</div>
+
+          <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;">
+            {# Reviewer Assignment Form #}
+            {% if reviewers and case.stage not in ('CLOSED', 'RECALLED') %}
+            <form method="post" action="/cases/{{ case.id }}/assign_reviewer" style="display:flex;gap:.5rem;align-items:center;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <select name="reviewer_id" required style="width:auto;font-size:12px;padding:.3rem .5rem;">
+                <option value="" disabled {% if not case.reviewer_id %}selected{% endif %}>Assign Reviewer…</option>
+                {% for r in reviewers %}
+                <option value="{{ r.id }}" {% if case.reviewer_id == r.id %}selected{% endif %}>{{ r.full_name }} (Reviewer)</option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-secondary btn-sm">Assign Reviewer</button>
+            </form>
+            {% endif %}
+
+            {# Consent Verification Form #}
+            {% if case.purpose == PurposeEnum.employee_screening_with_consent.value and not case.consent_verified %}
+            <form method="post" action="/cases/{{ case.id }}/verify_consent" style="display:inline;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-warning btn-sm">✓ Verify Consent Token</button>
+            </form>
+            {% endif %}
+
+            {# Approve Intake button for Compliance Gate #}
+            {% if case.stage == 'COMPLIANCE_GATE' %}
+            <form method="post" action="/cases/{{ case.id }}/approve_intake" style="display:inline;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-success btn-sm">Approve Intake → COLLECT</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+      </div>
+
+      {# ── NEXT ACTION DIRECTIVE CARD ─────────────────────────── #}
+      <div class="card">
+        <div class="card-title">NEXT ACTION DIRECTIVE</div>
+
+        {# Directive Banner #}
+        {% if case.stage == 'INTAKE_DRAFT' %}
+          <div class="alert alert-info">
+            <strong>Next Action:</strong> Advance this intake draft to Compliance Gate.
+          </div>
+        {% elif case.stage == 'COMPLIANCE_GATE' %}
+          <div class="alert alert-warning">
+            <strong>Next Action:</strong> Compliance Administrator approval required before collection can begin.
+            {% if case.purpose == PurposeEnum.employee_screening_with_consent.value and not case.consent_verified %}
+            <br><em>Consent token must be verified first.</em>
+            {% endif %}
+          </div>
+        {% elif case.stage == 'COLLECT' %}
+          <div class="alert alert-info">
+            <strong>Next Action:</strong> Operator executes Source Charter collection modules and advances to Claim Extraction.
+          </div>
+        {% elif case.stage == 'CLAIM_EXTRACTION' %}
+          <div class="alert alert-info">
+            <strong>Next Action:</strong> Operator reviews atomic claims citing accepted evidence snapshots and advances to Correlation.
+          </div>
+        {% elif case.stage == 'CORRELATION_AND_SCORING' %}
+          <div class="alert alert-info">
+            <strong>Next Action:</strong> Operator verifies entity resolution match tiers and clusters finding groups.
+            {% if not case.reviewer_id %}
+            <br><strong>Requirement:</strong> Compliance Administrator must assign a Reviewer before advancing to Independent Review.
+            {% endif %}
+          </div>
+        {% elif case.stage == 'INDEPENDENT_REVIEW' %}
+          <div class="alert alert-warning">
+            <strong>Next Action:</strong> Independent Reviewer (<strong>{{ case.reviewer.full_name if case.reviewer else 'Unassigned' }}</strong>) inspects claims, verifies Section 7 adverse finding criteria, and approves or returns for rework.
+          </div>
+        {% elif case.stage == 'BUILD_AND_QA' %}
+          <div class="alert alert-info">
+            <strong>Next Action:</strong> Assemble versioned intelligence dossier (v{{ case.dossier_version }}.0), Coverage Manifest, and submit for Release Gate sign-off.
+          </div>
+        {% elif case.stage == 'RELEASE_GATE' %}
+          <div class="alert alert-warning">
+            <strong>Next Action:</strong> Compliance Administrator reviews compiled dossier and signs off for final release and closure.
+          </div>
+        {% elif case.stage == 'CLOSED' %}
+          <div class="alert alert-success">
+            <strong>Status:</strong> Case dossier is officially released and closed.
+          </div>
+        {% elif case.stage == 'RECALLED' %}
+          <div class="alert alert-warning">
+            <strong>Status:</strong> Dossier recalled. Compliance Administrator must reopen case in COLLECT or INDEPENDENT_REVIEW.
+          </div>
+        {% endif %}
+
+        {# ── Primary Advance Action ───────────────────────────── #}
+        {% if can_advance and forward_target %}
+        <form method="post" action="/cases/{{ case.id }}/advance" class="mt-3">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <input type="hidden" name="to_stage" value="{{ forward_target }}">
+          <button type="submit" class="btn btn-primary" style="font-size:14px;padding:.6rem 1.4rem;">
+            Advance to {{ forward_target | replace('_', ' ') }} →
+          </button>
+        </form>
+        {% elif advance_block_reason %}
+        <div class="alert alert-info mt-2" style="background:#f1f5f9;border-color:#cbd5e1;color:#475569;">
+          <strong>Action Blocked:</strong> {{ advance_block_reason }}
+        </div>
+        {% endif %}
+
+        {# ── Reopen Recalled Case (Admin Only) ───────────────── #}
+        {% if is_admin and case.stage == 'RECALLED' %}
+        <div class="mt-3" style="display:flex;gap:1rem;">
+          <form method="post" action="/cases/{{ case.id }}/advance">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <input type="hidden" name="to_stage" value="COLLECT">
+            <button type="submit" class="btn btn-primary btn-sm">Reopen in COLLECT →</button>
+          </form>
+          <form method="post" action="/cases/{{ case.id }}/advance">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <input type="hidden" name="to_stage" value="INDEPENDENT_REVIEW">
+            <button type="submit" class="btn btn-secondary btn-sm">Reopen in INDEPENDENT_REVIEW →</button>
+          </form>
+        </div>
+        {% endif %}
+
+      </div>
+
+      {# ── REWORK CONTROLS (Reviewer / Admin) ───────────────── #}
+      {% if (is_reviewer and case.stage == 'INDEPENDENT_REVIEW') or (is_admin and case.stage in ('COMPLIANCE_GATE', 'RELEASE_GATE', 'BUILD_AND_QA')) %}
+      <div class="card" style="border-left:4px solid #d97706;">
+        <div class="card-title" style="color:#d97706;">Return Case for Rework</div>
+        <p class="text-muted text-xs mb-2">
+          Reject current stage and return dossier to an earlier workflow stage. A mandatory justification of at least 10 characters is required for the audit log.
+        </p>
+
+        <form method="post" action="/cases/{{ case.id }}/rework">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+          <div class="form-group">
+            <label for="rework_to_stage">Return Target Stage</label>
+            <select id="rework_to_stage" name="to_stage" required style="max-width:320px;">
+              {% if case.stage == 'INDEPENDENT_REVIEW' %}
+              <option value="CORRELATION_AND_SCORING">CORRELATION AND SCORING (Re-evaluate entity matching)</option>
+              <option value="COLLECT">COLLECT (Acquire additional source evidence)</option>
+              {% elif case.stage == 'RELEASE_GATE' %}
+              <option value="BUILD_AND_QA">BUILD AND QA (Rebuild dossier layout)</option>
+              <option value="INDEPENDENT_REVIEW">INDEPENDENT REVIEW (Re-conduct peer review)</option>
+              {% elif case.stage == 'BUILD_AND_QA' %}
+              <option value="INDEPENDENT_REVIEW">INDEPENDENT REVIEW (Return for re-review)</option>
+              {% elif case.stage == 'COMPLIANCE_GATE' %}
+              <option value="INTAKE_DRAFT">INTAKE DRAFT (Clarify scope/subject)</option>
+              {% endif %}
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="rework_reason">Mandatory Rework Justification (min 10 characters)</label>
+            <textarea id="rework_reason" name="rework_reason" required minlength="10" rows="3"
+                      placeholder="Specify the exact evidentiary deficiency, adverse finding conflict, or disambiguation gap requiring correction..."></textarea>
+          </div>
+
+          <button type="submit" class="btn btn-warning btn-sm">Return for Rework ↩</button>
+        </form>
+      </div>
+      {% endif %}
+
+      {# ── RECALL CONTROLS (Compliance Admin on CLOSED case) ─── #}
+      {% if is_admin and case.stage == 'CLOSED' %}
+      <div class="card" style="border-left:4px solid #dc2626;">
+        <div class="card-title" style="color:#dc2626;">Post-Release Recall Mechanism</div>
+        <p class="text-muted text-xs mb-2">
+          Revoke the released dossier and active delivery links. This increments the dossier version (to v{{ (case.dossier_version or 1) + 1 }}.0), logs an audited recall event, and reopens the case for correction.
+        </p>
+
+        <form method="post" action="/cases/{{ case.id }}/recall">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+          <div class="form-group">
+            <label for="reopen_to_stage">Reopen Target Stage</label>
+            <select id="reopen_to_stage" name="reopen_to_stage" required style="max-width:320px;">
+              <option value="COLLECT">COLLECT (Acquire updated records & evidence)</option>
+              <option value="INDEPENDENT_REVIEW">INDEPENDENT REVIEW (Re-evaluate existing findings)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="recall_reason">Mandatory Recall Justification (min 10 characters)</label>
+            <textarea id="recall_reason" name="recall_reason" required minlength="10" rows="3"
+                      placeholder="Detail the newly discovered contradictory evidence, legal challenge, or registry amendment necessitating dossier recall..."></textarea>
+          </div>
+
+          <button type="submit" class="btn btn-danger btn-sm">⚠ Execute Dossier Recall</button>
+        </form>
+      </div>
+      {% endif %}
+
+    </div>
+
+    {# ── Right Column: Immutable Activity Feed ───────────────── #}
+    <div>
+      <div class="card">
+        <div class="flex justify-between items-center mb-2">
+          <div class="card-title" style="margin-bottom:0;">Audit Trail</div>
+          <span class="text-xs text-muted font-mono">Live Sync</span>
+        </div>
+        <p class="text-xs text-muted mb-2">Immutable server-enforced event ledger</p>
+        <div class="feed"
+             hx-get="/cases/{{ case.id }}/feed"
+             hx-trigger="every 30s"
+             hx-swap="innerHTML">
+          {% include "cases/_feed.html" %}
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

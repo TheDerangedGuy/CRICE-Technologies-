@@ -165,14 +165,16 @@ tr:hover td { background: #f8fafc; }
   font-weight: 700;
   letter-spacing: .03em;
 }
-.badge-intake        { background: #fef9c3; color: #854d0e; }
-.badge-collect       { background: #dbeafe; color: #1e40af; }
-.badge-pre-ai-review { background: #ede9fe; color: #5b21b6; }
-.badge-ai-processing { background: #f0fdf4; color: #166534; }
-.badge-post-ai-review{ background: #f0e6ff; color: #7e22ce; }
-.badge-build         { background: #ffedd5; color: #9a3412; }
-.badge-release       { background: #d1fae5; color: #065f46; }
-.badge-closed        { background: #f1f5f9; color: #475569; }
+.badge-intake-draft          { background: #fef9c3; color: #854d0e; }
+.badge-compliance-gate       { background: #fed7aa; color: #9a3412; }
+.badge-collect               { background: #dbeafe; color: #1e40af; }
+.badge-claim-extraction      { background: #ede9fe; color: #5b21b6; }
+.badge-correlation-and-scoring{ background: #e0e7ff; color: #3730a3; }
+.badge-independent-review    { background: #fce7f3; color: #9d174d; }
+.badge-build-and-qa          { background: #ffedd5; color: #9a3412; }
+.badge-release-gate          { background: #d1fae5; color: #065f46; }
+.badge-closed                { background: #f1f5f9; color: #334155; }
+.badge-recalled              { background: #fee2e2; color: #991b1b; }
 
 /* ── Activity feed ───────────────────────────────────────────────────── */
 .feed { max-height: 420px; overflow-y: auto; }

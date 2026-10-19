@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Open New Case – CRICE Lab{% endblock %}
+{% block body %}
+<div class="container" style="max-width:680px;">
+  <div class="page-header">
+    <div>
+      <h1>Open New Case Dossier</h1>
+      <p class="text-muted text-xs">Stage 1: INTAKE_DRAFT — Scope Definition & Client KYC Gating</p>
+    </div>
+    <a href="/cases" class="btn btn-secondary">← Back to cases</a>
+  </div>
+
+  {% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+
+  <div class="card">
+    <form method="post" action="/cases/new">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+      <div class="section-label" style="margin-top:0;">Client Governance (B2B Gate)</div>
+
+      <div class="form-group">
+        <label for="client_name">Client Name</label>
+        <input type="text" id="client_name" name="client_name" required
+               placeholder="Acme Legal Advisors LLP / Horizon Ventures Ltd" maxlength="200">
+        <p class="help-text">The contracted B2B entity commissioning this investigation.</p>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;background:#f8fafc;padding:.75rem;border-radius:6px;border:1px solid #e2e8f0;">
+        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin:0;">
+          <input type="checkbox" name="client_kyc_verified" value="true" checked>
+          <span><strong>Client KYC Verified</strong></span>
+        </label>
+        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin:0;">
+          <input type="checkbox" name="msa_signed" value="true" checked>
+          <span><strong>Master Services Agreement (MSA) Signed</strong></span>
+        </label>
+      </div>
+
+      <div class="section-label">Investigation Scope & Purpose</div>
+
+      <div class="form-group">
+        <label for="purpose">Permissible Purpose</label>
+        <select id="purpose" name="purpose" required>
+          <option value="" disabled selected>Select permissible purpose…</option>
+          {% for p in purposes %}
+          <option value="{{ p.value }}">{{ p.value | replace('_', ' ') | title }}</option>
+          {% endfor %}
+        </select>
+        <p class="help-text">
+          Standard corporate purposes on verified company subjects auto-advance to COLLECT.
+          Fraud investigations, person subjects, and employee screenings halt at COMPLIANCE_GATE.
+        </p>
+      </div>
+
+      <div class="section-label">Subject Identification & Disambiguation</div>
+
+      <div class="form-group">
+        <label for="subject_type">Subject Type</label>
+        <select id="subject_type" name="subject_type" required>
+          <option value="" disabled selected>Select subject type…</option>
+          {% for s in subject_types %}
+          <option value="{{ s.value }}">{{ s.value | title }}</option>
+          {% endfor %}
+        </select>
+        <p class="help-text">
+          Company subjects with verified KYC/MSA auto-advance to collection.
+          Person subjects require explicit human approval by Compliance Administrator.
+        </p>
+      </div>
+
+      <div class="form-group">
+        <label for="subject_name">Subject Full Legal Name</label>
+        <input type="text" id="subject_name" name="subject_name" required
+               placeholder="e.g. Apex Global Technologies Pvt Ltd / Rajesh Kumar Sharma" maxlength="200">
+      </div>
+
+      <div class="form-group">
+        <label for="subject_identifier">
+          Subject Disambiguation Identifier
+          <span class="text-muted">(Optional — Company MCA CIN / Person DIN / Tax ID)</span>
+        </label>
+        <input type="text" id="subject_identifier" name="subject_identifier"
+               placeholder="Company MCA CIN (e.g. U72200MH2018PTC123456) or Director DIN (e.g. 01234567)"
+               maxlength="50">
+        <p class="help-text">
+          <strong>Note:</strong> This is the official registry identifier (e.g. MCA CIN / DIN).
+          The internal <strong>Case Reference (CIN)</strong> (e.g. <code>CRICE-XXXXXXXX</code>) will be generated automatically.
+        </p>
+      </div>
+
+      <button type="submit" class="btn btn-primary mt-3" style="width:100%;justify-content:center;">
+        Create Case Dossier →
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

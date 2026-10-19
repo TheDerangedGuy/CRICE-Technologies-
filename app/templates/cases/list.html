@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Cases – CRICE Lab{% endblock %}
+{% block body %}
+<div class="container">
+  <div class="page-header">
+    <div>
+      <h1>Case Dossiers</h1>
+      <p class="text-muted text-xs">Active investigation cases and intelligence portfolios</p>
+    </div>
+    <a href="/cases/new" class="btn btn-primary">+ Open new case</a>
+  </div>
+
+  {% if cases %}
+  <div class="card" style="padding:0;overflow-x:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Case Ref</th>
+          <th>Version</th>
+          <th>Client</th>
+          <th>Subject</th>
+          <th>Stage</th>
+          <th>Operator</th>
+          <th>Reviewer</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for case in cases %}
+        <tr>
+          <td>
+            <a href="/cases/{{ case.id }}" class="font-mono font-bold">{{ case.case_ref }}</a>
+          </td>
+          <td>
+            <span class="badge font-mono">v{{ case.dossier_version }}.0</span>
+            {% if case.is_recalled %}
+            <span class="badge badge-recalled" style="margin-left:.2rem;">RECALLED</span>
+            {% endif %}
+          </td>
+          <td>
+            {{ case.client_name }}
+            <br>
+            {% if case.client_kyc_verified and case.msa_signed %}
+            <span class="text-xs text-muted">✓ KYC & MSA Verified</span>
+            {% else %}
+            <span class="text-xs text-muted" style="color:#b45309;">⚠ KYC/MSA Pending</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="text-muted text-xs">{{ case.subject_type | upper }}</span><br>
+            <strong>{{ case.subject_name }}</strong>
+            {% if case.subject_identifier %}
+            <br><span class="font-mono text-xs text-muted">{{ case.subject_identifier }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {% set stage_slug = case.stage | lower | replace('_', '-') %}
+            <span class="badge badge-{{ stage_slug }}">{{ case.stage | replace('_', ' ') }}</span>
+            {% if case.stage == 'COMPLIANCE_GATE' %}
+            <br><span class="text-xs text-muted" style="color:#b45309;">Awaiting Approval</span>
+            {% endif %}
+          </td>
+          <td>{{ case.operator.full_name if case.operator else '—' }}</td>
+          <td>{{ case.reviewer.full_name if case.reviewer else '<span class="text-muted text-xs">Unassigned</span>' | safe }}</td>
+          <td class="text-muted text-xs font-mono">{{ case.created_at.strftime('%Y-%m-%d') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card empty-state">
+    <h3>No cases yet</h3>
+    <p>Open a new case to initiate the cyber reconnaissance & intelligence correlation workflow.</p>
+    <a href="/cases/new" class="btn btn-primary mt-3">+ Open new case</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

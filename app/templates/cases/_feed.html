@@ -1,0 +1,38 @@
+{# Partial template – rendered by workspace and HTMX 30s poll #}
+{% for entry in feed %}
+<div class="feed-item {% if not entry.allowed or 'denied' in entry.action %}denied{% endif %}">
+  <div class="flex justify-between items-center">
+    <div class="feed-action font-mono">
+      {{ entry.action | replace('_', ' ') | title }}
+    </div>
+    {% if not entry.allowed %}
+    <span class="badge" style="background:#fee2e2;color:#991b1b;font-size:10px;">DENIED</span>
+    {% else %}
+    <span class="badge" style="background:#dcfce7;color:#166534;font-size:10px;">ALLOWED</span>
+    {% endif %}
+  </div>
+
+  {% if entry.from_stage or entry.to_stage %}
+  <div class="text-xs font-mono text-muted mt-1">
+    {{ entry.from_stage or '—' }} → {{ entry.to_stage or '—' }}
+  </div>
+  {% endif %}
+
+  {% if entry.detail %}
+  <div class="text-xs text-muted mt-1" style="word-break:break-word;">
+    {% for k, v in entry.detail.items() %}
+      {% if v is not none %}
+      <span class="font-mono">{{ k }}:</span> {{ v }}{% if not loop.last %} &middot; {% endif %}
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="feed-meta flex justify-between items-center mt-1">
+    <span>{{ entry.user.full_name if entry.user else 'System' }}</span>
+    <span class="font-mono">{{ entry.timestamp.strftime('%H:%M:%S UTC') if entry.timestamp else '' }}</span>
+  </div>
+</div>
+{% else %}
+<div class="text-muted text-sm" style="padding:.5rem 0;text-align:center;">No activity recorded yet.</div>
+{% endfor %}

@@ -36,19 +36,35 @@ class SubjectType(str, enum.Enum):
     person = "person"
 
 
-class StageEnum(str, enum.Enum):
-    INTAKE = "INTAKE"
+class CaseStage(str, enum.Enum):
+    INTAKE_DRAFT = "INTAKE_DRAFT"
+    COMPLIANCE_GATE = "COMPLIANCE_GATE"
     COLLECT = "COLLECT"
-    PRE_AI_REVIEW = "PRE_AI_REVIEW"
-    AI_PROCESSING = "AI_PROCESSING"
-    POST_AI_REVIEW = "POST_AI_REVIEW"
-    BUILD = "BUILD"
-    RELEASE = "RELEASE"
+    CLAIM_EXTRACTION = "CLAIM_EXTRACTION"
+    CORRELATION_AND_SCORING = "CORRELATION_AND_SCORING"
+    INDEPENDENT_REVIEW = "INDEPENDENT_REVIEW"
+    BUILD_AND_QA = "BUILD_AND_QA"
+    RELEASE_GATE = "RELEASE_GATE"
     CLOSED = "CLOSED"
+    RECALLED = "RECALLED"
 
 
-# Ordered list used by advance_case() to validate one-step forward movement.
-STAGE_ORDER = list(StageEnum)
+# Backward compatibility alias
+StageEnum = CaseStage
+
+# Canonical stage order for progression display
+STAGE_ORDER = [
+    CaseStage.INTAKE_DRAFT,
+    CaseStage.COMPLIANCE_GATE,
+    CaseStage.COLLECT,
+    CaseStage.CLAIM_EXTRACTION,
+    CaseStage.CORRELATION_AND_SCORING,
+    CaseStage.INDEPENDENT_REVIEW,
+    CaseStage.BUILD_AND_QA,
+    CaseStage.RELEASE_GATE,
+    CaseStage.CLOSED,
+    CaseStage.RECALLED,
+]
 
 
 def _now():
@@ -114,7 +130,7 @@ class Session(Base):
 class TotpUsed(Base):
     """
     Records TOTP codes that have been consumed to prevent replay attacks.
-    Rows older than 90 seconds (2 TOTP windows) can be pruned.
+    Rows older than 90 seconds (2-3 TOTP windows) can be pruned.
     """
     __tablename__ = "totp_used"
 
@@ -136,21 +152,33 @@ class Case(Base):
             name="ck_cases_subject_type",
         ),
         sa.CheckConstraint(
-            "stage IN ('INTAKE','COLLECT','PRE_AI_REVIEW','AI_PROCESSING',"
-            "'POST_AI_REVIEW','BUILD','RELEASE','CLOSED')",
+            "stage IN ('INTAKE_DRAFT','COMPLIANCE_GATE','COLLECT','CLAIM_EXTRACTION',"
+            "'CORRELATION_AND_SCORING','INDEPENDENT_REVIEW','BUILD_AND_QA',"
+            "'RELEASE_GATE','CLOSED','RECALLED')",
             name="ck_cases_stage",
+        ),
+        sa.CheckConstraint(
+            "reviewer_id IS NULL OR operator_id != reviewer_id",
+            name="ck_cases_reviewer_not_operator",
         ),
     )
 
     id = sa.Column(sa.Integer, primary_key=True)
-    case_ref = sa.Column(sa.String(20), unique=True, nullable=False, index=True)
+    case_ref = sa.Column(sa.String(14), unique=True, nullable=False, index=True)
     client_name = sa.Column(sa.String(200), nullable=False)
+    client_kyc_verified = sa.Column(sa.Boolean, default=False, nullable=False)
+    msa_signed = sa.Column(sa.Boolean, default=False, nullable=False)
     purpose = sa.Column(sa.String(50), nullable=False)
     subject_type = sa.Column(sa.String(20), nullable=False)
     subject_name = sa.Column(sa.String(200), nullable=False)
     subject_identifier = sa.Column(sa.String(50), nullable=True)
-    stage = sa.Column(sa.String(20), default=StageEnum.INTAKE.value, nullable=False)
+    stage = sa.Column(sa.String(30), default=CaseStage.INTAKE_DRAFT.value, nullable=False)
     intake_approved = sa.Column(sa.Boolean, default=False, nullable=False)
+    consent_verified = sa.Column(sa.Boolean, default=False, nullable=False)
+    dossier_version = sa.Column(sa.Integer, default=1, nullable=False)
+    is_recalled = sa.Column(sa.Boolean, default=False, nullable=False)
+    rework_reason = sa.Column(sa.Text, nullable=True)
+
     operator_id = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=False)
     reviewer_id = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=True)
     created_by = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=False)
@@ -164,7 +192,7 @@ class Case(Base):
     creator = relationship("User", foreign_keys=[created_by], lazy="select")
 
     def __repr__(self):
-        return f"<Case {self.case_ref!r} stage={self.stage}>"
+        return f"<Case {self.case_ref!r} stage={self.stage} v={self.dossier_version}>"
 
 
 class AuditLog(Base):
@@ -178,6 +206,9 @@ class AuditLog(Base):
     user_id = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=True)
     case_id = sa.Column(sa.Integer, sa.ForeignKey("cases.id"), nullable=True)
     action = sa.Column(sa.String(100), nullable=False)
+    from_stage = sa.Column(sa.String(30), nullable=True)
+    to_stage = sa.Column(sa.String(30), nullable=True)
+    allowed = sa.Column(sa.Boolean, default=True, nullable=False)
     detail = sa.Column(sa.JSON, nullable=True)
     ip = sa.Column(sa.String(45), nullable=True)
 
@@ -185,4 +216,4 @@ class AuditLog(Base):
     case = relationship("Case", foreign_keys=[case_id], lazy="select")
 
     def __repr__(self):
-        return f"<AuditLog id={self.id} action={self.action!r}>"
+        return f"<AuditLog id={self.id} action={self.action!r} allowed={self.allowed}>"

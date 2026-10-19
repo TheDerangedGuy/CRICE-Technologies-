@@ -2,12 +2,13 @@
 
 Revision ID: 0001
 Revises:
-Create Date: 2026-10-06
+Create Date: 2026-10-19
 
 Notes:
  - Uses timezone-aware TIMESTAMP WITH TIME ZONE on Postgres; DATETIME on SQLite.
  - Postgres trigger blocks UPDATE/DELETE on audit_log at the DB level.
  - Enum values stored as VARCHAR with CHECK constraints.
+ - Bilateral separation of duties enforced via CHECK (reviewer_id IS NULL OR operator_id != reviewer_id).
 """
 from typing import Sequence, Union
 
@@ -19,7 +20,7 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# Detect dialect for conditional DDL
+
 def _is_postgres():
     bind = op.get_bind()
     return bind.dialect.name == "postgresql"
@@ -80,14 +81,20 @@ def upgrade() -> None:
     op.create_table(
         "cases",
         sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("case_ref", sa.String(length=20), nullable=False),
+        sa.Column("case_ref", sa.String(length=14), nullable=False),
         sa.Column("client_name", sa.String(length=200), nullable=False),
+        sa.Column("client_kyc_verified", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("msa_signed", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("purpose", sa.String(length=50), nullable=False),
         sa.Column("subject_type", sa.String(length=20), nullable=False),
         sa.Column("subject_name", sa.String(length=200), nullable=False),
         sa.Column("subject_identifier", sa.String(length=50), nullable=True),
-        sa.Column("stage", sa.String(length=20), nullable=False),
+        sa.Column("stage", sa.String(length=30), nullable=False, server_default="INTAKE_DRAFT"),
         sa.Column("intake_approved", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("consent_verified", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("dossier_version", sa.Integer(), nullable=False, server_default="1"),
+        sa.Column("is_recalled", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("rework_reason", sa.Text(), nullable=True),
         sa.Column("operator_id", sa.Integer(), nullable=False),
         sa.Column("reviewer_id", sa.Integer(), nullable=True),
         sa.Column("created_by", sa.Integer(), nullable=False),
@@ -98,9 +105,14 @@ def upgrade() -> None:
             name="ck_cases_subject_type",
         ),
         sa.CheckConstraint(
-            "stage IN ('INTAKE','COLLECT','PRE_AI_REVIEW','AI_PROCESSING',"
-            "'POST_AI_REVIEW','BUILD','RELEASE','CLOSED')",
+            "stage IN ('INTAKE_DRAFT','COMPLIANCE_GATE','COLLECT','CLAIM_EXTRACTION',"
+            "'CORRELATION_AND_SCORING','INDEPENDENT_REVIEW','BUILD_AND_QA',"
+            "'RELEASE_GATE','CLOSED','RECALLED')",
             name="ck_cases_stage",
+        ),
+        sa.CheckConstraint(
+            "reviewer_id IS NULL OR operator_id != reviewer_id",
+            name="ck_cases_reviewer_not_operator",
         ),
         sa.ForeignKeyConstraint(["operator_id"], ["users.id"]),
         sa.ForeignKeyConstraint(["reviewer_id"], ["users.id"]),
@@ -117,6 +129,9 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Integer(), nullable=True),
         sa.Column("case_id", sa.Integer(), nullable=True),
         sa.Column("action", sa.String(length=100), nullable=False),
+        sa.Column("from_stage", sa.String(length=30), nullable=True),
+        sa.Column("to_stage", sa.String(length=30), nullable=True),
+        sa.Column("allowed", sa.Boolean(), nullable=False, server_default="true"),
         sa.Column("detail", sa.JSON(), nullable=True),
         sa.Column("ip", sa.String(length=45), nullable=True),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
