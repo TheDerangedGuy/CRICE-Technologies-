@@ -21,22 +21,35 @@
       <div class="section-label" style="margin-top:0;">Client Governance (B2B Gate)</div>
 
       <div class="form-group">
-        <label for="client_name">Client Name</label>
-        <input type="text" id="client_name" name="client_name" required
-               placeholder="Acme Legal Advisors LLP / Horizon Ventures Ltd" maxlength="200">
-        <p class="help-text">The contracted B2B entity commissioning this investigation.</p>
+        <label for="client_registry">Verified B2B Client Registry</label>
+        <select id="client_registry" onchange="if(this.value){ document.getElementById('client_name').value = this.value; }">
+          <option value="">-- Select from pre-approved client registry or enter below --</option>
+          {% for vc in verified_clients %}
+          <option value="{{ vc }}">{{ vc }} (Verified Active KYC/MSA)</option>
+          {% endfor %}
+        </select>
+        <p class="help-text">Selecting a registered client automatically attaches server-side verified KYC and signed MSA.</p>
       </div>
 
+      <div class="form-group">
+        <label for="client_name">Client Legal Entity Name</label>
+        <input type="text" id="client_name" name="client_name" required
+               placeholder="Acme Capital Partners / Horizon Ventures Ltd" maxlength="200">
+        <p class="help-text">Unregistered client entities will halt at Compliance Gate until KYC & MSA are verified by Compliance Administrator.</p>
+      </div>
+
+      {% if current_user.role == 'compliance_admin' %}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;background:#f8fafc;padding:.75rem;border-radius:6px;border:1px solid #e2e8f0;">
         <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin:0;">
-          <input type="checkbox" name="client_kyc_verified" value="true" checked>
-          <span><strong>Client KYC Verified</strong></span>
+          <input type="checkbox" name="client_kyc_verified" value="true">
+          <span><strong>Admin Override: Client KYC Verified</strong></span>
         </label>
         <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin:0;">
-          <input type="checkbox" name="msa_signed" value="true" checked>
-          <span><strong>Master Services Agreement (MSA) Signed</strong></span>
+          <input type="checkbox" name="msa_signed" value="true">
+          <span><strong>Admin Override: MSA Signed</strong></span>
         </label>
       </div>
+      {% endif %}
 
       <div class="section-label">Investigation Scope & Purpose</div>
 

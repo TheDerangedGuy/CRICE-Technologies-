@@ -4,8 +4,9 @@ app/cases/service.py – Deterministic DAG State Machine for CRICE case lifecycl
 Enforces:
   - Strict transition matrix across the 10 CaseStage states.
   - Role-gated progression and bilateral separation of duties (operator != reviewer).
-  - Auto-advance on company intake with verified KYC and MSA.
+  - Server-side verified B2B client lookup; operators cannot self-attest KYC/MSA.
   - Human compliance gate for person subjects, fraud, or unverified clients.
+  - Compliance Admin client verification at Compliance Gate.
   - Consent verification gate for employee screening.
   - Mandatory rework justification (>= 10 chars) on all backward loops.
   - Compliance admin post-release recall mechanism (version increment + is_recalled flag).
@@ -28,6 +29,18 @@ from app.models import (
     User,
     UserRole,
 )
+
+# ── Closed Verified B2B Client Registry ───────────────────────────────────────
+# In production, this can be backed by a B2B clients table or external CRM.
+# KYC and MSA validity is determined server-side from this registry, preventing
+# operator self-attestation privilege escalation.
+VERIFIED_B2B_CLIENTS = {
+    "Acme Capital Partners": {"kyc_verified": True, "msa_signed": True},
+    "Global Investment Banking Corp": {"kyc_verified": True, "msa_signed": True},
+    "Apex Legal Associates LLP": {"kyc_verified": True, "msa_signed": True},
+    "Horizon Ventures Ltd": {"kyc_verified": True, "msa_signed": True},
+    "Internal Compliance Audit": {"kyc_verified": True, "msa_signed": True},
+}
 
 # ── Valid Transitions Matrix ──────────────────────────────────────────────────
 
@@ -80,6 +93,22 @@ BACKWARD_TRANSITIONS = {
     (CaseStage.RELEASE_GATE.value, CaseStage.BUILD_AND_QA.value),
     (CaseStage.RELEASE_GATE.value, CaseStage.INDEPENDENT_REVIEW.value),
     (CaseStage.CLOSED.value, CaseStage.RECALLED.value),
+}
+
+OPERATOR_TRANSITIONS = {
+    (CaseStage.INTAKE_DRAFT.value, CaseStage.COMPLIANCE_GATE.value),
+    (CaseStage.INTAKE_DRAFT.value, CaseStage.COLLECT.value),
+    (CaseStage.COLLECT.value, CaseStage.CLAIM_EXTRACTION.value),
+    (CaseStage.CLAIM_EXTRACTION.value, CaseStage.CORRELATION_AND_SCORING.value),
+    (CaseStage.CORRELATION_AND_SCORING.value, CaseStage.INDEPENDENT_REVIEW.value),
+    (CaseStage.BUILD_AND_QA.value, CaseStage.RELEASE_GATE.value),
+    (CaseStage.BUILD_AND_QA.value, CaseStage.INDEPENDENT_REVIEW.value),
+}
+
+REVIEWER_TRANSITIONS = {
+    (CaseStage.INDEPENDENT_REVIEW.value, CaseStage.BUILD_AND_QA.value),
+    (CaseStage.INDEPENDENT_REVIEW.value, CaseStage.CORRELATION_AND_SCORING.value),
+    (CaseStage.INDEPENDENT_REVIEW.value, CaseStage.COLLECT.value),
 }
 
 
@@ -141,11 +170,15 @@ def create_case(
 ) -> Case:
     """
     Drafts a new case and evaluates auto-advance eligibility.
+    Server-side client verification:
+      - If acting_user is compliance_admin: client_kyc_verified and msa_signed may be directly set.
+      - If acting_user is operator: client_kyc_verified and msa_signed CANNOT be self-certified.
+        They are determined strictly via server-side lookup against VERIFIED_B2B_CLIENTS.
+        Unregistered client details are set to False, forcing the case to halt at COMPLIANCE_GATE.
     Auto-advances to COLLECT only if:
       - subject_type == 'company'
       - purpose in (corporate_due_diligence, litigation_support, vendor_verification)
-      - client_kyc_verified is True AND msa_signed is True
-    Otherwise places the case in COMPLIANCE_GATE.
+      - effective_kyc is True AND effective_msa is True
     """
     if not client_name.strip():
         raise HTTPException(status_code=400, detail="Client name is required.")
@@ -156,6 +189,20 @@ def create_case(
     if subject_type not in [s.value for s in SubjectType]:
         raise HTTPException(status_code=400, detail=f"Invalid subject type: {subject_type}")
 
+    # Prevent operator self-attestation privilege escalation
+    cleaned_client = client_name.strip()
+    if acting_user.role == UserRole.compliance_admin.value:
+        effective_kyc = client_kyc_verified
+        effective_msa = msa_signed
+    else:
+        # Operator role: look up in server-side verified client registry
+        if cleaned_client in VERIFIED_B2B_CLIENTS:
+            effective_kyc = VERIFIED_B2B_CLIENTS[cleaned_client]["kyc_verified"]
+            effective_msa = VERIFIED_B2B_CLIENTS[cleaned_client]["msa_signed"]
+        else:
+            effective_kyc = False
+            effective_msa = False
+
     # Auto-approval evaluation
     standard_corporate_purposes = (
         PurposeEnum.corporate_due_diligence.value,
@@ -165,8 +212,8 @@ def create_case(
     auto_eligible = (
         subject_type == SubjectType.company.value
         and purpose in standard_corporate_purposes
-        and client_kyc_verified is True
-        and msa_signed is True
+        and effective_kyc is True
+        and effective_msa is True
     )
 
     stage = CaseStage.COLLECT.value if auto_eligible else CaseStage.COMPLIANCE_GATE.value
@@ -174,9 +221,9 @@ def create_case(
 
     case = Case(
         case_ref=_generate_case_ref(db),
-        client_name=client_name.strip(),
-        client_kyc_verified=client_kyc_verified,
-        msa_signed=msa_signed,
+        client_name=cleaned_client,
+        client_kyc_verified=effective_kyc,
+        msa_signed=effective_msa,
         purpose=purpose,
         subject_type=subject_type,
         subject_name=subject_name.strip(),
@@ -206,6 +253,8 @@ def create_case(
             "purpose": purpose,
             "auto_advanced": auto_eligible,
             "intake_approved": intake_approved,
+            "client_kyc_verified": effective_kyc,
+            "msa_signed": effective_msa,
         },
         ip=ip,
         commit=True,
@@ -263,12 +312,55 @@ def transition_case(
                 status_code=400,
             )
 
-    # 4. Stage-specific actor and guard condition validation
+    # 4. Direction 2: Bilateral separation of duties during stage execution
+    # Ensure assigned reviewer cannot execute operator transitions on this case
+    if (from_stage, to_stage) in OPERATOR_TRANSITIONS:
+        if case.reviewer_id is not None and user.id == case.reviewer_id:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Bilateral separation violation: Assigned reviewer cannot execute operator transitions on this case.",
+            )
+
+    # Ensure case operator cannot execute review transitions on this case
+    if (from_stage, to_stage) in REVIEWER_TRANSITIONS:
+        if user.id == case.operator_id:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Bilateral separation violation: Case operator cannot review their own case.",
+            )
+        if case.reviewer_id != user.id:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Only the assigned independent reviewer can execute review transitions on this case.",
+            )
+
+    # 5. Stage-specific actor and guard condition validation
 
     # ── COMPLIANCE_GATE -> COLLECT
     if from_stage == CaseStage.COMPLIANCE_GATE.value and to_stage == CaseStage.COLLECT.value:
         if user.role != UserRole.compliance_admin.value:
             _deny(db, case, user, to_stage, ip, "Only a Compliance Administrator can approve intake at Compliance Gate.")
+        if not case.client_kyc_verified or not case.msa_signed:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Client KYC and MSA must be verified by Compliance Administrator before collection can begin.",
+            )
         if case.purpose == PurposeEnum.employee_screening_with_consent.value and not case.consent_verified:
             _deny(
                 db,
@@ -320,7 +412,6 @@ def transition_case(
 
     # ── INDEPENDENT_REVIEW -> BUILD_AND_QA
     elif from_stage == CaseStage.INDEPENDENT_REVIEW.value and to_stage == CaseStage.BUILD_AND_QA.value:
-        # Strictly restricted to the assigned reviewer (bilateral separation)
         if case.reviewer_id != user.id:
             _deny(
                 db,
@@ -384,14 +475,14 @@ def transition_case(
         if user.role != UserRole.compliance_admin.value:
             _deny(db, case, user, to_stage, ip, "Only a Compliance Administrator can reopen a recalled case.")
 
-    # 5. Apply transition state changes
+    # 6. Apply transition state changes
     old_stage = case.stage
     case.stage = to_stage
     if is_backward and rework_reason:
         case.rework_reason = rework_reason.strip()
     db.flush()
 
-    # 6. Write successful audit log
+    # 7. Write successful audit log
     log_action(
         db,
         action="advance_stage" if not is_backward else "rework_stage",
@@ -468,6 +559,32 @@ def approve_intake(case: Case, user: User, db: Session, ip: str = "unknown") -> 
     return transition_case(case, user, CaseStage.COLLECT.value, db, ip=ip)
 
 
+def verify_client_kyc(case: Case, user: User, db: Session, ip: str = "unknown") -> Case:
+    """Compliance Admin marks Client KYC and MSA as verified at COMPLIANCE_GATE."""
+    if user.role != UserRole.compliance_admin.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Only a Compliance Administrator can verify client KYC and MSA.",
+        )
+    case.client_kyc_verified = True
+    case.msa_signed = True
+    db.flush()
+    log_action(
+        db,
+        action="client_kyc_verified",
+        user_id=user.id,
+        case_id=case.id,
+        from_stage=case.stage,
+        to_stage=case.stage,
+        allowed=True,
+        detail={"client_kyc_verified": True, "msa_signed": True},
+        ip=ip,
+        commit=True,
+    )
+    db.refresh(case)
+    return case
+
+
 def verify_consent(case: Case, user: User, db: Session, ip: str = "unknown") -> Case:
     """Marks subject consent as verified (required for employee screening)."""
     if user.role != UserRole.compliance_admin.value:
@@ -529,14 +646,19 @@ def assign_reviewer(
         raise HTTPException(status_code=403, detail="Only a Compliance Administrator can assign reviewers.")
 
     reviewer = db.get(User, reviewer_id)
-    if not reviewer or not reviewer.is_active:
-        _deny_assignment("Reviewer not found or inactive.")
+    if not reviewer:
+        _deny_assignment("Reviewer not found.")
 
+    if not reviewer.is_active:
+        _deny_assignment("Cannot assign inactive reviewer.")
+
+    # Direction 1: Bilateral conflict check
     if reviewer.id == case.operator_id:
         _deny_assignment("Bilateral conflict: The operator of a case cannot also be its reviewer.")
 
+    # Direction 1: Role check
     if reviewer.role != UserRole.reviewer.value:
-        _deny_assignment("The assigned user must have the reviewer role.")
+        _deny_assignment(f"Role mismatch: Target user has role '{reviewer.role}', but must have 'reviewer' role.")
 
     old_reviewer_id = case.reviewer_id
     case.reviewer_id = reviewer_id

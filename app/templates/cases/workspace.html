@@ -124,6 +124,14 @@
             </form>
             {% endif %}
 
+            {# Client KYC/MSA Verification Form #}
+            {% if not case.client_kyc_verified or not case.msa_signed %}
+            <form method="post" action="/cases/{{ case.id }}/verify_client" style="display:inline;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-warning btn-sm">✓ Verify Client KYC & MSA</button>
+            </form>
+            {% endif %}
+
             {# Approve Intake button for Compliance Gate #}
             {% if case.stage == 'COMPLIANCE_GATE' %}
             <form method="post" action="/cases/{{ case.id }}/approve_intake" style="display:inline;">

@@ -15,12 +15,14 @@ from sqlalchemy.orm import Session
 from app.auth.roles import get_current_user
 from app.cases.service import (
     ALLOWED_TRANSITIONS,
+    VERIFIED_B2B_CLIENTS,
     advance_case,
     approve_intake,
     assign_reviewer,
     create_case,
     recall_case,
     rework_case,
+    verify_client_kyc,
     verify_consent,
 )
 from app.db import get_db
@@ -107,6 +109,7 @@ def cases_new_get(
             "csrf_token": sess.csrf_token if sess else "",
             "purposes": list(PurposeEnum),
             "subject_types": list(SubjectType),
+            "verified_clients": list(VERIFIED_B2B_CLIENTS.keys()),
             "error": None,
         },
     )
@@ -412,6 +415,35 @@ async def case_verify_consent_post(
 
     try:
         verify_consent(case, current_user, db, ip=_ip(request))
+    except HTTPException as exc:
+        return HTMLResponse(
+            f'<div class="alert alert-error">{exc.detail}</div>',
+            status_code=exc.status_code,
+        )
+
+    return RedirectResponse(f"/cases/{case_id}", status_code=302)
+
+
+# ── POST /cases/{id}/verify_client ───────────────────────────────────────────
+
+
+@router.post("/cases/{case_id}/verify_client", response_model=None)
+async def case_verify_client_post(
+    case_id: int,
+    request: Request,
+    csrf_token: str = Form(default="", alias="_csrf"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    if not _csrf_ok(request, csrf_token, db):
+        raise HTTPException(status_code=403, detail="CSRF check failed.")
+
+    case: Optional[Case] = db.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    try:
+        verify_client_kyc(case, current_user, db, ip=_ip(request))
     except HTTPException as exc:
         return HTMLResponse(
             f'<div class="alert alert-error">{exc.detail}</div>',

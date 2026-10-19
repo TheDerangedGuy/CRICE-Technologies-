@@ -22,6 +22,7 @@ from typing import Optional, Union
 import pyotp
 import pytest
 from fastapi.testclient import TestClient
+import sqlalchemy as sa
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
@@ -56,6 +57,21 @@ def engine():
         cursor.close()
 
     Base.metadata.create_all(eng)
+    with eng.begin() as conn:
+        conn.execute(sa.text("""
+            CREATE TRIGGER IF NOT EXISTS trg_audit_log_no_update
+            BEFORE UPDATE ON audit_log
+            BEGIN
+                SELECT RAISE(FAIL, 'audit_log is append-only: UPDATE is forbidden');
+            END;
+        """))
+        conn.execute(sa.text("""
+            CREATE TRIGGER IF NOT EXISTS trg_audit_log_no_delete
+            BEFORE DELETE ON audit_log
+            BEGIN
+                SELECT RAISE(FAIL, 'audit_log is append-only: DELETE is forbidden');
+            END;
+        """))
     yield eng
     Base.metadata.drop_all(eng)
     eng.dispose()
@@ -67,9 +83,32 @@ def db(engine):
     session = SessionLocal()
     yield session
     session.rollback()
+    try:
+        session.execute(sa.text("DROP TRIGGER IF EXISTS trg_audit_log_no_delete"))
+        session.execute(sa.text("DROP TRIGGER IF EXISTS trg_audit_log_no_update"))
+    except Exception:
+        pass
     for table in reversed(Base.metadata.sorted_tables):
         session.execute(table.delete())
     session.commit()
+    try:
+        session.execute(sa.text("""
+            CREATE TRIGGER trg_audit_log_no_update
+            BEFORE UPDATE ON audit_log
+            BEGIN
+                SELECT RAISE(FAIL, 'audit_log is append-only: UPDATE is forbidden');
+            END;
+        """))
+        session.execute(sa.text("""
+            CREATE TRIGGER trg_audit_log_no_delete
+            BEFORE DELETE ON audit_log
+            BEGIN
+                SELECT RAISE(FAIL, 'audit_log is append-only: DELETE is forbidden');
+            END;
+        """))
+        session.commit()
+    except Exception:
+        pass
     session.close()
 
 

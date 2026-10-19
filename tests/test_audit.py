@@ -6,9 +6,11 @@ Tests:
   - Every denied transition writes an audit entry with allowed=False, from_stage, to_stage, and reason.
   - Audit log writer commits denied attempts even when service call raises HTTPException.
   - Case creation writes an initial audit record.
+  - Database trigger blocks SQL UPDATE and DELETE operations on audit_log.
 """
 from fastapi import HTTPException
 import pytest
+import sqlalchemy as sa
 
 from app.audit.writer import log_action
 from app.cases.service import advance_case, create_case
@@ -22,12 +24,10 @@ def test_case_creation_logs_audit_entry(db):
     case = create_case(
         db=db,
         acting_user=op,
-        client_name="Audit Client",
+        client_name="Global Investment Banking Corp",
         purpose=PurposeEnum.corporate_due_diligence.value,
         subject_type=SubjectType.company.value,
         subject_name="Audit Target Corp",
-        client_kyc_verified=True,
-        msa_signed=True,
     )
     entry = (
         db.query(AuditLog)
@@ -85,3 +85,39 @@ def test_denied_transition_records_stages_and_allowed_false(db):
     assert entry.from_stage == CaseStage.COLLECT.value
     assert entry.to_stage == CaseStage.BUILD_AND_QA.value
     assert "Stage skipping is prohibited" in entry.detail.get("reason", "")
+
+
+def test_audit_log_immutability_blocks_update_and_delete(db):
+    """Attempting SQL UPDATE or DELETE on audit_log must be blocked by DB trigger."""
+    op = make_user(db, email="op_immutable@crice.test")
+    entry = log_action(
+        db,
+        action="immutable_test_event",
+        user_id=op.id,
+        commit=True,
+    )
+
+    # 1. Attempt UPDATE
+    with pytest.raises(Exception) as exc_up:
+        db.execute(
+            sa.text("UPDATE audit_log SET action = 'tampered' WHERE id = :id"),
+            {"id": entry.id},
+        )
+        db.commit()
+    db.rollback()
+    assert "append-only" in str(exc_up.value).lower() or "forbidden" in str(exc_up.value).lower()
+
+    # 2. Attempt DELETE
+    with pytest.raises(Exception) as exc_del:
+        db.execute(
+            sa.text("DELETE FROM audit_log WHERE id = :id"),
+            {"id": entry.id},
+        )
+        db.commit()
+    db.rollback()
+    assert "append-only" in str(exc_del.value).lower() or "forbidden" in str(exc_del.value).lower()
+
+    # Verify record remained intact
+    row = db.get(AuditLog, entry.id)
+    assert row is not None
+    assert row.action == "immutable_test_event"
