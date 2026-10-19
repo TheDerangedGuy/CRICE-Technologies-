@@ -46,8 +46,24 @@ This document provides clear operational guidelines for handling cases across th
 
 ## 3. Stage 3: COLLECT
 
-- **Objective**: Execute designated reconnaissance across public corporate registries, official gazettes, and open sources.
-- **Action**: In Milestone 1, click **Advance to Claim Extraction** once collection scope is confirmed.
+- **Objective**: Execute reconnaissance across chartered sources (automated RDAP, manual registry captures), record coverage manifest status, and triage evidence into the immutable evidence vault.
+- **Operator Actions**:
+  1. **Automated Domain RDAP Execution**:
+     - For subjects with corporate domain names, run the automated RDAP adapter.
+     - The system queries authoritative RDAP services, stores canonicalized response payloads, and computes SHA-256 snapshot hashes automatically.
+  2. **Tamper-Evident Manual Capture**:
+     - For corporate registries (`MCA_MANUAL`, `GST_MANUAL`, `ECOURTS_MANUAL`, `NEWS_MANUAL`), query the designated registry.
+     - Submit the manual capture record with source code, query input, outcome (`FOUND`, `NOT_FOUND`, `FAILED`), official source URL, and raw text snapshot ($\ge 20$ chars).
+     - The system normalizes line endings and stamps the record with a cryptographically verifiable SHA-256 hash.
+  3. **Inline Evidence Triage**:
+     - Review each captured `Record` in the Evidence Vault.
+     - Mark as **Accept** if the record matches the disambiguation criteria and contributes relevant factual evidence.
+     - Mark as **Reject** if non-pertinent or spurious, providing a mandatory justification note ($\ge 5$ characters).
+  4. **Stage Advancement Criteria**:
+     - Ensure at least one chartered source run is completed (`FOUND`, `NOT_FOUND`, or `FAILED`).
+     - Ensure **zero** records remain in `PENDING_TRIAGE`.
+     - Advance to **Claim Extraction** if at least one record is `ACCEPTED`.
+     - If all searches returned no matching records or all records were rejected, attest to **Zero Findings** via the checkbox before advancing.
 
 ---
 

@@ -14,8 +14,8 @@ import sqlalchemy as sa
 
 from app.audit.writer import log_action
 from app.cases.service import advance_case, create_case
-from app.models import AuditLog, Case, CaseStage, PurposeEnum, SubjectType, UserRole
-from tests.conftest import make_case, make_user
+from app.models import AuditLog, CaseStage, PurposeEnum, SubjectType
+from tests.conftest import make_accepted_record, make_case, make_user
 
 
 def test_case_creation_logs_audit_entry(db):
@@ -44,6 +44,7 @@ def test_successful_transition_records_stages_and_allowed_true(db):
     """Successful stage transition writes from_stage, to_stage, and allowed=True."""
     op = make_user(db, email="op_audit_succ@crice.test")
     case = make_case(db, operator=op, stage=CaseStage.COLLECT, intake_approved=True)
+    make_accepted_record(db, case, op)
 
     advance_case(case, op, CaseStage.CLAIM_EXTRACTION.value, db)
 

@@ -52,6 +52,39 @@ class CaseStage(str, enum.Enum):
 # Backward compatibility alias
 StageEnum = CaseStage
 
+
+class SourceTier(str, enum.Enum):
+    A = "A"
+    B = "B"
+    C = "C"
+
+
+class SourceReliability(str, enum.Enum):
+    A = "A"
+    B = "B"
+    C = "C"
+    D = "D"
+    E = "E"
+    F = "F"
+
+
+class CollectionMode(str, enum.Enum):
+    AUTOMATED = "AUTOMATED"
+    MANUAL_CAPTURE = "MANUAL_CAPTURE"
+
+
+class SourceRunStatus(str, enum.Enum):
+    FOUND = "FOUND"
+    NOT_FOUND = "NOT_FOUND"
+    FAILED = "FAILED"
+
+
+class TriageStatus(str, enum.Enum):
+    PENDING_TRIAGE = "PENDING_TRIAGE"
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+
+
 # Canonical stage order for progression display
 STAGE_ORDER = [
     CaseStage.INTAKE_DRAFT,
@@ -190,9 +223,107 @@ class Case(Base):
     operator = relationship("User", foreign_keys=[operator_id], lazy="select")
     reviewer = relationship("User", foreign_keys=[reviewer_id], lazy="select")
     creator = relationship("User", foreign_keys=[created_by], lazy="select")
+    source_runs = relationship("SourceRun", back_populates="case", lazy="select", order_by="SourceRun.started_at.desc()")
+    records = relationship("Record", back_populates="case", lazy="select", order_by="Record.retrieved_at.desc()")
 
     def __repr__(self):
         return f"<Case {self.case_ref!r} stage={self.stage} v={self.dossier_version}>"
+
+
+class SourceCharter(Base):
+    __tablename__ = "source_charter"
+    __table_args__ = (
+        sa.CheckConstraint("tier IN ('A','B','C')", name="ck_source_charter_tier"),
+        sa.CheckConstraint(
+            "default_reliability IN ('A','B','C','D','E','F')",
+            name="ck_source_charter_reliability",
+        ),
+        sa.CheckConstraint(
+            "collection_mode IN ('AUTOMATED','MANUAL_CAPTURE')",
+            name="ck_source_charter_mode",
+        ),
+    )
+
+    id = sa.Column(sa.Integer, primary_key=True)
+    code = sa.Column(sa.String(50), unique=True, nullable=False, index=True)
+    name = sa.Column(sa.String(120), nullable=False)
+    owner = sa.Column(sa.String(120), nullable=False)
+    tier = sa.Column(sa.String(1), nullable=False)
+    default_reliability = sa.Column(sa.String(1), nullable=False)
+    collection_mode = sa.Column(sa.String(20), nullable=False)
+    legal_basis = sa.Column(sa.String(255), nullable=False)
+    is_active = sa.Column(sa.Boolean, default=True, nullable=False)
+    created_at = sa.Column(sa.DateTime(timezone=True), default=_now, nullable=False)
+
+    def __repr__(self):
+        return f"<SourceCharter {self.code} tier={self.tier} mode={self.collection_mode}>"
+
+
+class SourceRun(Base):
+    __tablename__ = "source_runs"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "status IN ('FOUND','NOT_FOUND','FAILED')",
+            name="ck_source_runs_status",
+        ),
+    )
+
+    id = sa.Column(sa.Integer, primary_key=True)
+    case_id = sa.Column(sa.Integer, sa.ForeignKey("cases.id"), nullable=False, index=True)
+    source_id = sa.Column(sa.Integer, sa.ForeignKey("source_charter.id"), nullable=False)
+    operator_id = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=False)
+    query_input = sa.Column(sa.String(255), nullable=False)
+    status = sa.Column(sa.String(20), nullable=False)
+    error_detail = sa.Column(sa.Text, nullable=True)
+    started_at = sa.Column(sa.DateTime(timezone=True), default=_now, nullable=False)
+    completed_at = sa.Column(sa.DateTime(timezone=True), default=_now, nullable=False)
+
+    case = relationship("Case", back_populates="source_runs", lazy="select")
+    source = relationship("SourceCharter", foreign_keys=[source_id], lazy="select")
+    operator = relationship("User", foreign_keys=[operator_id], lazy="select")
+    records = relationship("Record", back_populates="source_run", lazy="select")
+
+    def __repr__(self):
+        return f"<SourceRun id={self.id} case_id={self.case_id} status={self.status}>"
+
+
+class Record(Base):
+    """
+    Immutable Evidence Snapshots.
+    Once inserted, raw_content, snapshot_hash, source_url, and retrieved_at
+    must never be modified or deleted. Only triage decisions can be updated.
+    """
+    __tablename__ = "records"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "triage_status IN ('PENDING_TRIAGE','ACCEPTED','REJECTED')",
+            name="ck_records_triage_status",
+        ),
+    )
+
+    id = sa.Column(sa.Integer, primary_key=True)
+    case_id = sa.Column(sa.Integer, sa.ForeignKey("cases.id"), nullable=False, index=True)
+    source_run_id = sa.Column(sa.Integer, sa.ForeignKey("source_runs.id"), nullable=False)
+    source_id = sa.Column(sa.Integer, sa.ForeignKey("source_charter.id"), nullable=False)
+    title = sa.Column(sa.String(255), nullable=False)
+    source_url = sa.Column(sa.String(500), nullable=False)
+    raw_content = sa.Column(sa.Text, nullable=False)
+    content_type = sa.Column(sa.String(50), default="application/json", nullable=False)
+    snapshot_hash = sa.Column(sa.String(64), nullable=False)
+    extractor_version = sa.Column(sa.String(30), default="m2-v1.0", nullable=False)
+    retrieved_at = sa.Column(sa.DateTime(timezone=True), default=_now, nullable=False)
+    triage_status = sa.Column(sa.String(20), default=TriageStatus.PENDING_TRIAGE.value, nullable=False)
+    triage_note = sa.Column(sa.Text, nullable=True)
+    triaged_by_id = sa.Column(sa.Integer, sa.ForeignKey("users.id"), nullable=True)
+    triaged_at = sa.Column(sa.DateTime(timezone=True), nullable=True)
+
+    case = relationship("Case", back_populates="records", lazy="select")
+    source_run = relationship("SourceRun", back_populates="records", lazy="select")
+    source = relationship("SourceCharter", foreign_keys=[source_id], lazy="select")
+    triaged_by = relationship("User", foreign_keys=[triaged_by_id], lazy="select")
+
+    def __repr__(self):
+        return f"<Record id={self.id} title={self.title!r} hash={self.snapshot_hash[:8]} triage={self.triage_status}>"
 
 
 class AuditLog(Base):
@@ -217,3 +348,4 @@ class AuditLog(Base):
 
     def __repr__(self):
         return f"<AuditLog id={self.id} action={self.action!r} allowed={self.allowed}>"
+

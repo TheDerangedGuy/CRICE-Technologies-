@@ -24,8 +24,11 @@ from app.models import (
     Case,
     CaseStage,
     PurposeEnum,
+    Record,
+    SourceRun,
     STAGE_ORDER,
     SubjectType,
+    TriageStatus,
     User,
     UserRole,
 )
@@ -273,6 +276,7 @@ def transition_case(
     db: Session,
     ip: str = "unknown",
     rework_reason: Optional[str] = None,
+    zero_findings_attested: bool = False,
 ) -> Case:
     """
     Central DAG transition engine enforcing all state rules, actor authorizations,
@@ -381,6 +385,56 @@ def transition_case(
     elif from_stage == CaseStage.COLLECT.value and to_stage == CaseStage.CLAIM_EXTRACTION.value:
         if user.role != UserRole.compliance_admin.value and case.operator_id != user.id:
             _deny(db, case, user, to_stage, ip, "Only the assigned operator or Compliance Administrator can advance collection.")
+
+        runs_count = db.query(SourceRun).filter(SourceRun.case_id == case.id).count()
+        if runs_count == 0:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Cannot advance: execute at least one chartered source run first.",
+                status_code=400,
+            )
+
+        pending_count = (
+            db.query(Record)
+            .filter(
+                Record.case_id == case.id,
+                Record.triage_status == TriageStatus.PENDING_TRIAGE.value,
+            )
+            .count()
+        )
+        if pending_count > 0:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Cannot advance: all captured records must be triaged as ACCEPTED or REJECTED.",
+                status_code=400,
+            )
+
+        accepted_count = (
+            db.query(Record)
+            .filter(
+                Record.case_id == case.id,
+                Record.triage_status == TriageStatus.ACCEPTED.value,
+            )
+            .count()
+        )
+        if accepted_count == 0 and not zero_findings_attested:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Cannot advance with zero accepted records unless Zero Findings attestation is confirmed.",
+                status_code=400,
+            )
 
     # ── CLAIM_EXTRACTION -> CORRELATION_AND_SCORING
     elif from_stage == CaseStage.CLAIM_EXTRACTION.value and to_stage == CaseStage.CORRELATION_AND_SCORING.value:
@@ -497,6 +551,7 @@ def transition_case(
             "rework_reason": rework_reason if is_backward else None,
             "dossier_version": case.dossier_version,
             "is_recalled": case.is_recalled,
+            "zero_findings_attested": zero_findings_attested,
         },
         ip=ip,
         commit=True,
@@ -514,9 +569,17 @@ def advance_case(
     to_stage: str,
     db: Session,
     ip: str = "unknown",
+    zero_findings_attested: bool = False,
 ) -> Case:
     """Convenience forward advance wrapper."""
-    return transition_case(case, user, to_stage, db, ip=ip)
+    return transition_case(
+        case,
+        user,
+        to_stage,
+        db,
+        ip=ip,
+        zero_findings_attested=zero_findings_attested,
+    )
 
 
 def rework_case(

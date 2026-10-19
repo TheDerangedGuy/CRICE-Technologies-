@@ -25,15 +25,26 @@ from app.cases.service import (
     verify_client_kyc,
     verify_consent,
 )
+from app.collect.service import (
+    execute_domain_rdap,
+    execute_manual_capture,
+    get_case_collection_summary,
+    triage_record,
+)
 from app.db import get_db
 from app.models import (
     AuditLog,
     Case,
     CaseStage,
+    CollectionMode,
     PurposeEnum,
+    Record,
+    SourceCharter,
+    SourceRun,
     STAGE_ORDER,
     Session as SessionModel,
     SubjectType,
+    TriageStatus,
     User,
     UserRole,
 )
@@ -244,6 +255,27 @@ def case_workspace(
         .all()
     )
 
+    # Source runs, records, and chartered sources for M2
+    source_runs = (
+        db.query(SourceRun)
+        .filter(SourceRun.case_id == case_id)
+        .order_by(SourceRun.started_at.desc())
+        .all()
+    )
+    records = (
+        db.query(Record)
+        .filter(Record.case_id == case_id)
+        .order_by(Record.retrieved_at.desc())
+        .all()
+    )
+    chartered_sources = (
+        db.query(SourceCharter)
+        .filter(SourceCharter.is_active.is_(True))
+        .order_by(SourceCharter.code)
+        .all()
+    )
+    collection_summary = get_case_collection_summary(db, case_id)
+
     # Determine role-specific action authorization
     is_operator = case.operator_id == current_user.id
     is_reviewer = case.reviewer_id == current_user.id
@@ -260,13 +292,27 @@ def case_workspace(
             advance_block_reason = "Awaiting Compliance Administrator intake approval."
         elif case.purpose == PurposeEnum.employee_screening_with_consent.value and not case.consent_verified:
             advance_block_reason = "Employee screening requires verified consent before approval."
-    elif case.stage in (
-        CaseStage.COLLECT.value,
-        CaseStage.CLAIM_EXTRACTION.value,
-    ):
+    elif case.stage == CaseStage.COLLECT.value:
+        role_allowed = is_operator or is_admin
+        if not role_allowed:
+            advance_block_reason = "Collection is managed by the assigned operator."
+            can_advance = False
+        else:
+            if collection_summary["total_runs"] == 0:
+                can_advance = False
+                advance_block_reason = "Cannot advance: execute at least one chartered source run first."
+            elif collection_summary["pending_records"] > 0:
+                can_advance = False
+                advance_block_reason = f"Cannot advance: {collection_summary['pending_records']} record(s) pending triage. All captured records must be ACCEPTED or REJECTED."
+            elif collection_summary["accepted_records"] == 0:
+                can_advance = False
+                advance_block_reason = "Zero accepted records. Attest to Zero Findings to advance."
+            else:
+                can_advance = True
+    elif case.stage == CaseStage.CLAIM_EXTRACTION.value:
         can_advance = is_operator or is_admin
         if not can_advance:
-            advance_block_reason = "Collection and extraction are managed by the assigned operator."
+            advance_block_reason = "Extraction is managed by the assigned operator."
     elif case.stage == CaseStage.CORRELATION_AND_SCORING.value:
         can_advance = is_operator or is_admin
         if not case.reviewer_id:
@@ -300,10 +346,15 @@ def case_workspace(
             "is_admin": is_admin,
             "reviewers": reviewers,
             "feed": feed,
+            "source_runs": source_runs,
+            "records": records,
+            "chartered_sources": chartered_sources,
+            "collection_summary": collection_summary,
             "STAGE_ORDER": STAGE_ORDER,
             "CaseStage": CaseStage,
             "UserRole": UserRole,
             "PurposeEnum": PurposeEnum,
+            "TriageStatus": TriageStatus,
         },
     )
 
@@ -316,6 +367,7 @@ async def case_advance_post(
     case_id: int,
     request: Request,
     to_stage: str = Form(...),
+    zero_findings_attested: bool = Form(default=False),
     csrf_token: str = Form(default="", alias="_csrf"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -328,14 +380,21 @@ async def case_advance_post(
         raise HTTPException(status_code=404, detail="Case not found.")
 
     try:
-        advance_case(case, current_user, to_stage, db, ip=_ip(request))
+        advance_case(
+            case,
+            current_user,
+            to_stage,
+            db,
+            ip=_ip(request),
+            zero_findings_attested=zero_findings_attested,
+        )
     except HTTPException as exc:
         return HTMLResponse(
             f'<div class="alert alert-error">{exc.detail}</div>',
             status_code=exc.status_code,
         )
 
-    return RedirectResponse(f"/cases/{case_id}", status_code=302)
+    return RedirectResponse(f"/cases/{case.id}", status_code=302)
 
 
 # ── POST /cases/{id}/rework ───────────────────────────────────────────────────
@@ -542,3 +601,121 @@ def case_feed_get(
             "feed": feed,
         },
     )
+
+
+# ── POST /cases/{id}/collect/rdap ─────────────────────────────────────────────
+
+
+@router.post("/cases/{case_id}/collect/rdap", response_model=None)
+async def case_collect_rdap_post(
+    case_id: int,
+    request: Request,
+    domain: str = Form(...),
+    csrf_token: str = Form(default="", alias="_csrf"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    if not _csrf_ok(request, csrf_token, db):
+        raise HTTPException(status_code=403, detail="CSRF check failed.")
+
+    case: Optional[Case] = db.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    try:
+        execute_domain_rdap(db, case, current_user, domain, ip=_ip(request))
+    except HTTPException as exc:
+        return HTMLResponse(
+            f'<div class="alert alert-error">{exc.detail}</div>',
+            status_code=exc.status_code,
+        )
+
+    return RedirectResponse(f"/cases/{case_id}", status_code=302)
+
+
+# ── POST /cases/{id}/collect/manual ───────────────────────────────────────────
+
+
+@router.post("/cases/{case_id}/collect/manual", response_model=None)
+async def case_collect_manual_post(
+    case_id: int,
+    request: Request,
+    source_code: str = Form(...),
+    query_input: str = Form(...),
+    outcome: str = Form(...),
+    title: Optional[str] = Form(default=None),
+    source_url: Optional[str] = Form(default=None),
+    raw_content: Optional[str] = Form(default=None),
+    content_type: str = Form(default="text/plain"),
+    csrf_token: str = Form(default="", alias="_csrf"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    if not _csrf_ok(request, csrf_token, db):
+        raise HTTPException(status_code=403, detail="CSRF check failed.")
+
+    case: Optional[Case] = db.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    try:
+        execute_manual_capture(
+            db=db,
+            case=case,
+            operator=current_user,
+            source_code=source_code,
+            query_input=query_input,
+            outcome=outcome,
+            title=title,
+            source_url=source_url,
+            raw_content=raw_content,
+            content_type=content_type,
+            ip=_ip(request),
+        )
+    except HTTPException as exc:
+        return HTMLResponse(
+            f'<div class="alert alert-error">{exc.detail}</div>',
+            status_code=exc.status_code,
+        )
+
+    return RedirectResponse(f"/cases/{case_id}", status_code=302)
+
+
+# ── POST /cases/{id}/records/{record_id}/triage ───────────────────────────────
+
+
+@router.post("/cases/{case_id}/records/{record_id}/triage", response_model=None)
+async def case_record_triage_post(
+    case_id: int,
+    record_id: int,
+    request: Request,
+    status: str = Form(...),
+    triage_note: Optional[str] = Form(default=None),
+    csrf_token: str = Form(default="", alias="_csrf"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    if not _csrf_ok(request, csrf_token, db):
+        raise HTTPException(status_code=403, detail="CSRF check failed.")
+
+    case: Optional[Case] = db.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found.")
+
+    try:
+        triage_record(
+            db=db,
+            case=case,
+            record_id=record_id,
+            user=current_user,
+            status=status,
+            triage_note=triage_note,
+            ip=_ip(request),
+        )
+    except HTTPException as exc:
+        return HTMLResponse(
+            f'<div class="alert alert-error">{exc.detail}</div>',
+            status_code=exc.status_code,
+        )
+
+    return RedirectResponse(f"/cases/{case_id}", status_code=302)

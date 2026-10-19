@@ -14,8 +14,12 @@ os.environ["TOTP_ENCRYPTION_KEY"] = "bENUKm7bq0ztcgT0j9LFr5TRxaFbWNjJ0uqIfakpE3M
 os.environ["SECURE_COOKIES"] = "false"
 os.environ["SESSION_IDLE_SECONDS"] = "28800"
 os.environ["SESSION_ABSOLUTE_SECONDS"] = "86400"
+os.environ["CRICE_OFFLINE_RDAP"] = "1"
 
 # ── Now import app modules ────────────────────────────────────────────────────
+import datetime
+import hashlib
+import json
 import secrets
 from typing import Optional, Union
 
@@ -29,15 +33,22 @@ from sqlalchemy.orm import sessionmaker
 from app.auth.password import hash_password
 from app.auth.sessions import create_session, COOKIE_NAME
 from app.auth.totp_crypto import encrypt_totp_secret
+from app.collect.charter import seed_source_charter
 from app.db import Base, get_db
 from app.main import app
 from app.models import (
     Case,
     CaseStage,
+    CollectionMode,
     PurposeEnum,
+    Record,
     Session as SessionModel,
+    SourceCharter,
+    SourceRun,
+    SourceRunStatus,
     StageEnum,
     SubjectType,
+    TriageStatus,
     User,
     UserRole,
 )
@@ -72,6 +83,21 @@ def engine():
                 SELECT RAISE(FAIL, 'audit_log is append-only: DELETE is forbidden');
             END;
         """))
+        conn.execute(sa.text("""
+            CREATE TRIGGER IF NOT EXISTS trg_records_no_delete
+            BEFORE DELETE ON records
+            BEGIN
+                SELECT RAISE(FAIL, 'records are immutable: DELETE is forbidden');
+            END;
+        """))
+        conn.execute(sa.text("""
+            CREATE TRIGGER IF NOT EXISTS trg_records_immutable_content
+            BEFORE UPDATE ON records
+            WHEN (OLD.raw_content != NEW.raw_content OR OLD.snapshot_hash != NEW.snapshot_hash OR OLD.source_url != NEW.source_url OR OLD.retrieved_at != NEW.retrieved_at)
+            BEGIN
+                SELECT RAISE(FAIL, 'record evidence is immutable: payload and hash cannot be modified');
+            END;
+        """))
     yield eng
     Base.metadata.drop_all(eng)
     eng.dispose()
@@ -81,11 +107,14 @@ def engine():
 def db(engine):
     SessionLocal = sessionmaker(bind=engine)
     session = SessionLocal()
+    seed_source_charter(session)
     yield session
     session.rollback()
     try:
         session.execute(sa.text("DROP TRIGGER IF EXISTS trg_audit_log_no_delete"))
         session.execute(sa.text("DROP TRIGGER IF EXISTS trg_audit_log_no_update"))
+        session.execute(sa.text("DROP TRIGGER IF EXISTS trg_records_no_delete"))
+        session.execute(sa.text("DROP TRIGGER IF EXISTS trg_records_immutable_content"))
     except Exception:
         pass
     for table in reversed(Base.metadata.sorted_tables):
@@ -104,6 +133,21 @@ def db(engine):
             BEFORE DELETE ON audit_log
             BEGIN
                 SELECT RAISE(FAIL, 'audit_log is append-only: DELETE is forbidden');
+            END;
+        """))
+        session.execute(sa.text("""
+            CREATE TRIGGER trg_records_no_delete
+            BEFORE DELETE ON records
+            BEGIN
+                SELECT RAISE(FAIL, 'records are immutable: DELETE is forbidden');
+            END;
+        """))
+        session.execute(sa.text("""
+            CREATE TRIGGER trg_records_immutable_content
+            BEFORE UPDATE ON records
+            WHEN (OLD.raw_content != NEW.raw_content OR OLD.snapshot_hash != NEW.snapshot_hash OR OLD.source_url != NEW.source_url OR OLD.retrieved_at != NEW.retrieved_at)
+            BEGIN
+                SELECT RAISE(FAIL, 'record evidence is immutable: payload and hash cannot be modified');
             END;
         """))
         session.commit()
@@ -134,7 +178,8 @@ def client(db):
     app.dependency_overrides.clear()
 
 
-# ── Helper factories ──────────────────────────────────────────────────────────
+_DEFAULT_TEST_PASSWORD = "Password1!TestLong"
+_DEFAULT_PASSWORD_HASH = hash_password(_DEFAULT_TEST_PASSWORD)
 
 
 def make_user(
@@ -144,13 +189,14 @@ def make_user(
     role: UserRole = UserRole.operator,
     mfa_enabled: bool = True,
     is_active: bool = True,
-    password: str = "Password1!TestLong",
+    password: str = _DEFAULT_TEST_PASSWORD,
 ) -> User:
     totp_plain = pyotp.random_base32()
+    pw_hash = _DEFAULT_PASSWORD_HASH if password == _DEFAULT_TEST_PASSWORD else hash_password(password)
     user = User(
         email=email,
         full_name=full_name,
-        password_hash=hash_password(password),
+        password_hash=pw_hash,
         role=role.value,
         totp_secret_enc=encrypt_totp_secret(totp_plain) if mfa_enabled else None,
         mfa_enabled=mfa_enabled,
@@ -221,3 +267,71 @@ def make_session(db, user: User, mfa_verified: bool = True) -> tuple[SessionMode
 def csrf_token_for(row: SessionModel) -> str:
     """Return the CSRF token stored on the session row."""
     return row.csrf_token
+
+
+def make_source_run(
+    db,
+    case: Case,
+    operator: User,
+    source_code: str = "DOMAIN_RDAP",
+    query_input: str = "acmetech.demo",
+    status: str = "FOUND",
+    error_detail: Optional[str] = None,
+) -> SourceRun:
+    """Create a source run row."""
+    charter = db.query(SourceCharter).filter(SourceCharter.code == source_code).first()
+    if not charter:
+        seed_source_charter(db)
+        charter = db.query(SourceCharter).filter(SourceCharter.code == source_code).first()
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    run = SourceRun(
+        case_id=case.id,
+        source_id=charter.id,
+        operator_id=operator.id,
+        query_input=query_input,
+        status=status,
+        error_detail=error_detail,
+        started_at=now,
+        completed_at=now,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def make_accepted_record(
+    db,
+    case: Case,
+    operator: User,
+    source_code: str = "DOMAIN_RDAP",
+    title: str = "Verified Domain Registration Snapshot",
+    content: str = '{"ldhName": "acmetech.demo", "status": ["active"]}',
+    source_url: str = "https://rdap.org/domain/acmetech.demo",
+    triage_status: str = TriageStatus.ACCEPTED.value,
+) -> Record:
+    """Create an evidence record with deterministic SHA-256 hash."""
+    run = make_source_run(db, case, operator, source_code=source_code, query_input=case.subject_identifier or "acmetech.demo")
+    h = hashlib.sha256(content.encode("utf-8")).hexdigest().lower()
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    record = Record(
+        case_id=case.id,
+        source_run_id=run.id,
+        source_id=run.source_id,
+        title=title,
+        source_url=source_url,
+        raw_content=content,
+        content_type="application/json" if content.startswith("{") else "text/plain",
+        snapshot_hash=h,
+        extractor_version="m2-v1.0",
+        retrieved_at=now,
+        triage_status=triage_status,
+        triaged_by_id=operator.id if triage_status != TriageStatus.PENDING_TRIAGE.value else None,
+        triaged_at=now if triage_status != TriageStatus.PENDING_TRIAGE.value else None,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record

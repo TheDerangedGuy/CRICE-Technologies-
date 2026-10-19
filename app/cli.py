@@ -9,6 +9,8 @@ Usage (from repo root):
   python -m app.cli create-admin
   python -m app.cli seed-demo
 """
+import hashlib
+import json
 import secrets
 import sys
 import os
@@ -22,13 +24,19 @@ from app.models import (
     Case,
     CaseStage,
     PurposeEnum,
+    Record,
+    SourceCharter,
+    SourceRun,
+    SourceRunStatus,
     SubjectType,
+    TriageStatus,
     User,
     UserRole,
 )
 from app.auth.password import hash_password, _MIN_LENGTH
 from app.auth.totp_crypto import encrypt_totp_secret
 from app.audit.writer import log_action
+from app.collect.charter import seed_source_charter
 
 app_cli = typer.Typer(name="crice", help="CRICE Lab management CLI")
 
@@ -122,6 +130,11 @@ def seed_demo():
 
         db.commit()
 
+        # Seed Source Charter
+        charter_sources = seed_source_charter(db)
+        charter_map = {s.code: s for s in charter_sources}
+        typer.echo(f"✓ Seeded Source Charter ({len(charter_sources)} sources).")
+
         op_user = users.get(UserRole.operator.value)
         rev_user = users.get(UserRole.reviewer.value)
 
@@ -133,6 +146,17 @@ def seed_demo():
                 "client_name": "Global Investment Banking Corp",
                 "purpose": PurposeEnum.corporate_due_diligence.value,
                 "subject_type": SubjectType.company.value,
+                "sample_source": "DOMAIN_RDAP",
+                "sample_query": "acmetech.demo",
+                "sample_title": "Domain RDAP: acmetech.demo",
+                "sample_url": "https://rdap.org/domain/acmetech.demo",
+                "sample_content": json.dumps({
+                    "objectClassName": "domain",
+                    "handle": "DOM-ACME-DEMO-001",
+                    "ldhName": "acmetech.demo",
+                    "status": ["active", "clientTransferProhibited"],
+                    "entities": [{"roles": ["registrant"], "name": "Acme Technologies Ltd Admin"}],
+                }, indent=2, sort_keys=True),
             },
             {
                 "subject_name": "CRICE Technologies Private Limited",
@@ -140,6 +164,11 @@ def seed_demo():
                 "client_name": "Internal Compliance Audit",
                 "purpose": PurposeEnum.vendor_verification.value,
                 "subject_type": SubjectType.company.value,
+                "sample_source": "MCA_MANUAL",
+                "sample_query": "U72900KA2024PTC987654",
+                "sample_title": "MCA21 Corporate Master Data Filing",
+                "sample_url": "https://www.mca.gov.in/mcafoportal/companyLLPMasterData.do",
+                "sample_content": "MCA21 Statutory Master Data Record\nCIN: U72900KA2024PTC987654\nCompany: CRICE Technologies Private Limited\nStatus: Active / Listed",
             },
         ]
 
@@ -182,6 +211,38 @@ def seed_demo():
                     detail={"demo_seeded": True, "subject": spec["subject_name"]},
                 )
                 typer.echo(f"✓ Seeded demo case: {case.case_ref} ({spec['subject_name']})")
+
+                # Seed sample completed source run and accepted evidence record
+                src_charter = charter_map.get(spec["sample_source"])
+                if src_charter:
+                    run = SourceRun(
+                        case_id=case.id,
+                        source_id=src_charter.id,
+                        operator_id=op_user.id,
+                        query_input=spec["sample_query"],
+                        status=SourceRunStatus.FOUND.value,
+                    )
+                    db.add(run)
+                    db.flush()
+
+                    content = spec["sample_content"]
+                    h = hashlib.sha256(content.encode("utf-8")).hexdigest().lower()
+                    rec = Record(
+                        case_id=case.id,
+                        source_run_id=run.id,
+                        source_id=src_charter.id,
+                        title=spec["sample_title"],
+                        source_url=spec["sample_url"],
+                        raw_content=content,
+                        content_type="application/json" if spec["sample_source"] == "DOMAIN_RDAP" else "text/plain",
+                        snapshot_hash=h,
+                        extractor_version="m2-v1.0",
+                        triage_status=TriageStatus.ACCEPTED.value,
+                        triaged_by_id=op_user.id,
+                    )
+                    db.add(rec)
+                    db.flush()
+                    typer.echo(f"  ✓ Seeded evidence run: {spec['sample_source']} (SHA-256: {h[:12]}...)")
             else:
                 typer.echo(f"  Skip case (exists): {spec['subject_name']}")
 

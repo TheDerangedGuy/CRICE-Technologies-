@@ -214,5 +214,70 @@ All stage transitions are processed through `transition_case(case, user, to_stag
 
 ---
 
-## Out of Scope for M1
-Live source collection, evidence blob storage, LLM API calls, atomic claims table, dossier PDF generation, secure delivery links, file uploads, web scraping.
+## Milestone 2: Source Charter, RDAP Adapter, Manual Capture & Inline Triage
+
+Milestone 2 operationalizes the evidence collection and triage pipeline, enforcing provenance, charter governance, tamper-evident record hashing, and strict gate criteria before progressing to claim extraction.
+
+### Data Model (M2 Additions)
+
+#### `source_charter`
+- `id`: integer PK
+- `code`: varchar(50) unique index (e.g., `DOMAIN_RDAP`, `MCA_MANUAL`, `ECOURTS_MANUAL`, `GST_MANUAL`, `NEWS_MANUAL`)
+- `name`: varchar(120) not null
+- `owner`: varchar(120) not null (e.g., `"ICANN / Registry RDAP"`, `"Ministry of Corporate Affairs (MCA)"`)
+- `tier`: varchar(1) check in (`'A'`, `'B'`, `'C'`)
+- `default_reliability`: varchar(1) check in (`'A'`, `'B'`, `'C'`, `'D'`, `'E'`, `'F'`)
+- `collection_mode`: varchar(20) check in (`'AUTOMATED'`, `'MANUAL_CAPTURE'`)
+- `legal_basis`: varchar(255) not null (e.g., `"DPDP Act 2023 s.3(c)(ii) - Public registry under legal obligation"`)
+- `is_active`: boolean not null default true
+- `created_at`: timestamp with time zone
+
+#### `source_runs`
+- `id`: integer PK
+- `case_id`: integer FK -> cases.id not null, indexed
+- `source_id`: integer FK -> source_charter.id not null
+- `operator_id`: integer FK -> users.id not null
+- `query_input`: varchar(255) not null (e.g. domain, CIN, DIN, query string)
+- `status`: varchar(20) check in (`'FOUND'`, `'NOT_FOUND'`, `'FAILED'`)
+- `error_detail`: text nullable (populated when status == `'FAILED'` for Coverage Manifest degraded-mode tracking)
+- `started_at`: timestamp with time zone
+- `completed_at`: timestamp with time zone
+
+#### `records` (Immutable Evidence Snapshots)
+- `id`: integer PK
+- `case_id`: integer FK -> cases.id not null, indexed
+- `source_run_id`: integer FK -> source_runs.id not null
+- `source_id`: integer FK -> source_charter.id not null
+- `title`: varchar(255) not null
+- `source_url`: varchar(500) not null (official registry URL or RDAP endpoint)
+- `raw_content`: text not null (canonical JSON or raw text/HTML snapshot)
+- `content_type`: varchar(50) not null default `'application/json'`
+- `snapshot_hash`: varchar(64) not null (lowercase hex SHA-256 of UTF-8 `raw_content`)
+- `extractor_version`: varchar(30) not null default `'m2-v1.0'`
+- `retrieved_at`: timestamp with time zone not null
+- `triage_status`: varchar(20) not null default `'PENDING_TRIAGE'`, check in (`'PENDING_TRIAGE'`, `'ACCEPTED'`, `'REJECTED'`)
+- `triage_note`: text nullable (mandatory >= 5 chars if status is `'REJECTED'`)
+- `triaged_by_id`: integer FK -> users.id nullable
+- `triaged_at`: timestamp with time zone nullable
+- *Database trigger: blocks DELETE on records; blocks UPDATE on raw_content, snapshot_hash, source_url, retrieved_at.*
+
+---
+
+### M2 Stage Rules & Gate Hardening
+
+#### Hardened `COLLECT` -> `CLAIM_EXTRACTION` Gate
+Advancing from `COLLECT` to `CLAIM_EXTRACTION` enforces three mandatory server-side conditions in `app/cases/service.py`:
+1. **Source Execution Requirement**: The case must have at least one completed `source_run` row (`status` in `'FOUND'`, `'NOT_FOUND'`, `'FAILED'`).
+2. **Zero Pending Triage**: Zero `records` on the case may remain in `'PENDING_TRIAGE'` status. Every captured record must be explicitly triaged as `'ACCEPTED'` or `'REJECTED'`.
+3. **Evidence Requirement or Zero Findings Attestation**:
+   - The case must have at least one `'ACCEPTED'` record; OR
+   - The operator must explicitly submit `zero_findings_attested = True` when all runs returned `'NOT_FOUND'`/`'FAILED'` or all records were `'REJECTED'`.
+Transition attempts violating any of these criteria are rejected with HTTP 400 and logged to `audit_log` with `allowed = False`.
+
+#### Evidence Immutability
+Records are append-only snapshots. Once written, their raw content, SHA-256 snapshot hash, source URL, and retrieval timestamp cannot be updated or deleted by any user or route. Only the triage status, triage note, triaged_by_id, and triaged_at may be updated during `COLLECT`.
+
+---
+
+## Out of Scope for M2
+LLM claim extraction (M3), atomic claims table, entity resolution graph math (M4), dossier PDF generation (M5), secure delivery links (M6).
