@@ -412,6 +412,7 @@ def test_only_assigned_reviewer_can_complete_independent_review(client, db):
         operator=op,
         stage=CaseStage.INDEPENDENT_REVIEW,
         reviewer=rev,
+        zero_findings_attested=True,
     )
 
     # 1. Operator attempts advance -> blocked (403)

@@ -12,6 +12,7 @@ Enforces:
   - Compliance admin post-release recall mechanism (version increment + is_recalled flag).
   - Total audit coverage: allowed=False written & committed before raising HTTPException.
 """
+import json
 import re
 import secrets
 from typing import Optional
@@ -20,11 +21,18 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.audit.writer import log_action
+from app.claims.scoring import score_claim_entity_match
+from app.dossier.service import release_dossier, revoke_dossier
 from app.models import (
     Case,
     CaseStage,
+    Claim,
+    Dossier,
+    DossierSection,
+    MatchTier,
     PurposeEnum,
     Record,
+    ReviewStatus,
     SourceRun,
     STAGE_ORDER,
     SubjectType,
@@ -266,6 +274,86 @@ def create_case(
     return case
 
 
+# ── Section 7 Automated Classification Helper ─────────────────────────────────
+
+
+def _apply_section_7_classification(db: Session, case: Case, ip: str = "unknown") -> None:
+    """
+    Automated Section 7 Adverse-Claim & Finding Classification Rule.
+    Executes upon INDEPENDENT_REVIEW -> BUILD_AND_QA transition across all claims on the case:
+      - Rejected claims -> EXCLUDED
+      - Non-adverse approved claims with Tier 1/2 and confidence <= 3 -> CONFIRMED_FINDING
+      - Non-adverse approved claims with Tier 3 or confidence >= 4 -> UNRESOLVED_POSSIBLE_MATCH
+      - Adverse approved claims -> CONFIRMED_FINDING ONLY IF:
+          1. Identity link is TIER_1 OR (TIER_2 with >= 2 secondary attributes / confidence <= 2); AND
+          2. Corroborated by Tier A gov registry with TIER_1 match OR >= 2 distinct independent origin domains.
+          Otherwise automatically quarantined to UNRESOLVED_POSSIBLE_MATCH.
+    """
+    claims = db.query(Claim).filter(Claim.case_id == case.id).all()
+    approved_claims = [c for c in claims if c.review_status == ReviewStatus.APPROVED.value]
+
+    for c in claims:
+        if c.review_status == ReviewStatus.REJECTED.value:
+            c.dossier_section = DossierSection.EXCLUDED.value
+            continue
+
+        if not c.is_adverse:
+            if c.match_tier in (MatchTier.TIER_1.value, MatchTier.TIER_2.value) and c.identity_confidence <= 3:
+                c.dossier_section = DossierSection.CONFIRMED_FINDING.value
+            else:
+                c.dossier_section = DossierSection.UNRESOLVED_POSSIBLE_MATCH.value
+        else:
+            # Adverse claim: Section 7 Rule
+            matched_attrs = json.loads(c.matched_attributes_json or "[]")
+            cond1 = (c.match_tier == MatchTier.TIER_1.value) or (
+                c.match_tier == MatchTier.TIER_2.value and (len(matched_attrs) >= 2 or c.identity_confidence <= 2)
+            )
+
+            fg_key = c.finding_group_key or f"fg_{c.id}"
+            group_mates = [
+                m for m in approved_claims
+                if (m.finding_group_key or f"fg_{m.id}") == fg_key
+            ]
+
+            has_tier_a_gov = any(
+                (
+                    m.match_tier == MatchTier.TIER_1.value
+                    and m.primary_record
+                    and m.primary_record.source
+                    and (
+                        m.primary_record.source.tier == "A"
+                        or m.primary_record.source.code in ("MCA_MANUAL", "ECOURTS_MANUAL", "GST_MANUAL")
+                    )
+                )
+                for m in group_mates
+            )
+            domains = {m.origin_domain for m in group_mates if m.origin_domain}
+            has_multi_domain = len(domains) >= 2
+
+            if cond1 and (has_tier_a_gov or has_multi_domain):
+                c.dossier_section = DossierSection.CONFIRMED_FINDING.value
+            else:
+                c.dossier_section = DossierSection.UNRESOLVED_POSSIBLE_MATCH.value
+                log_action(
+                    db,
+                    action="claim_quarantined",
+                    user_id=case.reviewer_id or case.operator_id,
+                    case_id=case.id,
+                    from_stage=CaseStage.INDEPENDENT_REVIEW.value,
+                    to_stage=CaseStage.BUILD_AND_QA.value,
+                    allowed=True,
+                    detail={
+                        "claim_id": c.id,
+                        "reason": "Failed Section 7 adverse corroboration criteria; quarantined to UNRESOLVED_POSSIBLE_MATCH",
+                        "cond1": cond1,
+                        "has_tier_a_gov": has_tier_a_gov,
+                        "multi_domain_count": len(domains),
+                    },
+                    ip=ip,
+                    commit=False,
+                )
+
+
 # ── State Machine Transition Engine ───────────────────────────────────────────
 
 
@@ -441,6 +529,47 @@ def transition_case(
         if user.role != UserRole.compliance_admin.value and case.operator_id != user.id:
             _deny(db, case, user, to_stage, ip, "Only the assigned operator or Compliance Administrator can advance claims.")
 
+        claims_count = db.query(Claim).filter(Claim.case_id == case.id).count()
+        if claims_count == 0 and not (case.zero_findings_attested or zero_findings_attested):
+            accepted_records = (
+                db.query(Record)
+                .filter(Record.case_id == case.id, Record.triage_status == TriageStatus.ACCEPTED.value)
+                .all()
+            )
+            if accepted_records:
+                try:
+                    from app.claims.service import run_claim_extraction
+                    run_claim_extraction(db, case, user, ip=ip)
+                    claims_count = db.query(Claim).filter(Claim.case_id == case.id).count()
+                except Exception:
+                    pass
+
+        if claims_count == 0 and not (case.zero_findings_attested or zero_findings_attested):
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Cannot advance from Claim Extraction without at least one claim unless zero findings is attested.",
+                status_code=400,
+            )
+        if zero_findings_attested:
+            case.zero_findings_attested = True
+
+        # Pre-compute scores on unscored claims so operator begins with suggested scores
+        unscored_claims = (
+            db.query(Claim)
+            .filter(Claim.case_id == case.id, Claim.match_tier == MatchTier.UNSCORED.value)
+            .all()
+        )
+        for c in unscored_claims:
+            tier, conf, attrs, rationale = score_claim_entity_match(case, c)
+            c.match_tier = tier
+            c.identity_confidence = conf
+            c.matched_attributes_json = json.dumps(attrs)
+            c.scoring_rationale = rationale
+
     # ── CORRELATION_AND_SCORING -> INDEPENDENT_REVIEW
     elif from_stage == CaseStage.CORRELATION_AND_SCORING.value and to_stage == CaseStage.INDEPENDENT_REVIEW.value:
         if user.role != UserRole.compliance_admin.value and case.operator_id != user.id:
@@ -463,6 +592,48 @@ def transition_case(
                 ip,
                 "Bilateral separation of duties violation: reviewer cannot be the case operator.",
             )
+        case_claims = db.query(Claim).filter(Claim.case_id == case.id).all()
+        if not case_claims and not case.zero_findings_attested:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Cannot advance to Independent Review with zero claims unless Zero Findings is attested.",
+                status_code=400,
+            )
+        for c in case_claims:
+            if c.match_tier == MatchTier.UNSCORED.value:
+                _deny(
+                    db,
+                    case,
+                    user,
+                    to_stage,
+                    ip,
+                    f"Claim #{c.id} is still UNSCORED. All claims must be scored before entering Independent Review.",
+                    status_code=400,
+                )
+            if not (1 <= c.identity_confidence <= 6):
+                _deny(
+                    db,
+                    case,
+                    user,
+                    to_stage,
+                    ip,
+                    f"Claim #{c.id} has invalid confidence {c.identity_confidence}. Must be between 1 and 6.",
+                    status_code=400,
+                )
+            if c.is_adverse and not c.adverse_category:
+                _deny(
+                    db,
+                    case,
+                    user,
+                    to_stage,
+                    ip,
+                    f"Adverse claim #{c.id} is missing a required adverse category.",
+                    status_code=400,
+                )
 
     # ── INDEPENDENT_REVIEW -> BUILD_AND_QA
     elif from_stage == CaseStage.INDEPENDENT_REVIEW.value and to_stage == CaseStage.BUILD_AND_QA.value:
@@ -475,6 +646,37 @@ def transition_case(
                 ip,
                 "Only the assigned independent reviewer can complete review and advance to Build & QA.",
             )
+        case_claims_count = db.query(Claim).filter(Claim.case_id == case.id).count()
+        if case_claims_count == 0 and not case.zero_findings_attested:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                "Cannot advance to Build & QA with zero claims unless Zero Findings is attested.",
+                status_code=400,
+            )
+        pending_claims = (
+            db.query(Claim)
+            .filter(
+                Claim.case_id == case.id,
+                Claim.review_status == ReviewStatus.PENDING_REVIEW.value,
+            )
+            .count()
+        )
+        if pending_claims > 0:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                f"Cannot advance: {pending_claims} claim(s) are still PENDING_REVIEW.",
+                status_code=400,
+            )
+        # Apply Section 7 Automated Adverse-Claim and Non-Adverse Classification
+        _apply_section_7_classification(db, case, ip=ip)
 
     # ── INDEPENDENT_REVIEW -> Rework (COLLECT or CORRELATION_AND_SCORING)
     elif from_stage == CaseStage.INDEPENDENT_REVIEW.value and to_stage in (
@@ -495,6 +697,22 @@ def transition_case(
     elif from_stage == CaseStage.BUILD_AND_QA.value and to_stage == CaseStage.RELEASE_GATE.value:
         if user.role != UserRole.compliance_admin.value and case.operator_id != user.id:
             _deny(db, case, user, to_stage, ip, "Only the assigned operator or Compliance Administrator can submit for release.")
+        curr_ver = case.dossier_version or 1
+        dossier_exists = (
+            db.query(Dossier)
+            .filter(Dossier.case_id == case.id, Dossier.version == curr_ver)
+            .first()
+        )
+        if not dossier_exists:
+            _deny(
+                db,
+                case,
+                user,
+                to_stage,
+                ip,
+                f"Cannot advance to Release Gate: dossier version v{curr_ver}.0 has not been compiled yet.",
+                status_code=400,
+            )
 
     # ── BUILD_AND_QA -> INDEPENDENT_REVIEW (Rework)
     elif from_stage == CaseStage.BUILD_AND_QA.value and to_stage == CaseStage.INDEPENDENT_REVIEW.value:
@@ -505,6 +723,7 @@ def transition_case(
     elif from_stage == CaseStage.RELEASE_GATE.value and to_stage == CaseStage.CLOSED.value:
         if user.role != UserRole.compliance_admin.value:
             _deny(db, case, user, to_stage, ip, "Only a Compliance Administrator can release and close a case.")
+        release_dossier(db, case, user, ip=ip)
 
     # ── RELEASE_GATE -> Rework (BUILD_AND_QA or INDEPENDENT_REVIEW)
     elif from_stage == CaseStage.RELEASE_GATE.value and to_stage in (
@@ -518,6 +737,7 @@ def transition_case(
     elif from_stage == CaseStage.CLOSED.value and to_stage == CaseStage.RECALLED.value:
         if user.role != UserRole.compliance_admin.value:
             _deny(db, case, user, to_stage, ip, "Only a Compliance Administrator can recall a closed case.")
+        revoke_dossier(db, case, user, reason=rework_reason or "Recall triggered", ip=ip)
         case.is_recalled = True
         case.dossier_version = (case.dossier_version or 1) + 1
 

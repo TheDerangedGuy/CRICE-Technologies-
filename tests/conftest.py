@@ -227,6 +227,7 @@ def make_case(
     dossier_version: int = 1,
     is_recalled: bool = False,
     rework_reason: Optional[str] = None,
+    zero_findings_attested: bool = False,
 ) -> Case:
     stage_val = stage.value if isinstance(stage, CaseStage) else str(stage)
     case = Case(
@@ -244,6 +245,7 @@ def make_case(
         dossier_version=dossier_version,
         is_recalled=is_recalled,
         rework_reason=rework_reason,
+        zero_findings_attested=zero_findings_attested,
         operator_id=operator.id,
         reviewer_id=reviewer.id if reviewer else None,
         created_by=operator.id,

@@ -1,583 +1,829 @@
 {% extends "base.html" %}
-{% block title %}{{ case.case_ref }} – CRICE Lab{% endblock %}
+{% block title %}{{ case.case_ref }} // CRICE OPS LAB{% endblock %}
 {% block body %}
-<div class="container">
 
-  {# ── Stage Progress Bar ───────────────────────────────────── #}
-  <div class="stage-bar">
+<!-- Top Telemetry Ribbon -->
+<div class="telemetry-ribbon">
+  <div class="telemetry-meta">
+    <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+      <div class="telemetry-item">
+        <span class="telemetry-label">Case CIN:</span>
+        <span class="telemetry-value" style="color: var(--accent-cyan); font-size: 15px;">{{ case.case_ref }}</span>
+        <button type="button" class="btn btn-outline btn-sm" style="padding: 1px 6px; font-size: 10px;" onclick="navigator.clipboard.writeText('{{ case.case_ref }}'); this.innerText='COPIED!'; setTimeout(() => this.innerText='COPY', 1500);">COPY</button>
+      </div>
+
+      <div class="telemetry-item">
+        <span class="telemetry-label">Version:</span>
+        <span class="telemetry-badge-cyan">v{{ case.dossier_version }}.0</span>
+        {% if case.is_recalled %}
+        <span style="font-family: var(--font-mono); font-size: 10px; background: var(--accent-crimson-dim); color: var(--accent-crimson); border: 1px solid rgba(255,42,84,0.4); padding: 1px 5px; border-radius: 3px; font-weight: 700;">RECALLED</span>
+        {% endif %}
+      </div>
+
+      <div class="telemetry-item">
+        <span class="telemetry-label">Subject:</span>
+        <strong style="color: #fff;">{{ case.subject_name }}</strong>
+        <span style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">({{ case.subject_type | upper }})</span>
+      </div>
+
+      <div class="telemetry-item">
+        <span class="telemetry-label">Client Governance:</span>
+        {% if case.client_kyc_verified and case.msa_signed %}
+        <span style="color: var(--accent-green); font-family: var(--font-mono); font-size: 11px; font-weight: 700;">&check; KYC &amp; MSA VERIFIED</span>
+        {% else %}
+        <span style="color: var(--accent-amber); font-family: var(--font-mono); font-size: 11px; font-weight: 700;">&excl; KYC/MSA PENDING</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div>
+      <span class="pill" style="background: var(--bg-card); border: 1px solid var(--border-subtle); color: var(--text-muted);">CONFIDENTIAL // CLIENT-SCOPED</span>
+    </div>
+  </div>
+
+  <!-- 10-State Interactive Horizontal DAG Stepper -->
+  <div class="dag-stepper">
     {% set current_idx = STAGE_ORDER.index(case.stage) if case.stage in STAGE_ORDER else 0 %}
     {% for stage in STAGE_ORDER %}
     {% set idx = loop.index0 %}
-    <div class="stage-item {% if idx < current_idx and case.stage != 'RECALLED' %}done{% elif stage == case.stage %}current{% endif %}">
-      {{ stage | replace('_', ' ') }}
+    <div class="dag-step {% if idx < current_idx and case.stage != 'RECALLED' %}done{% elif stage == case.stage %}current{% endif %}">
+      {{ loop.index }}. {{ stage | replace('_', ' ') }}
     </div>
     {% endfor %}
   </div>
+</div>
 
-  {# ── Recall Notice ────────────────────────────────────────── #}
-  {% if case.is_recalled %}
-  <div class="alert alert-warning" style="border-left:4px solid #b45309;">
-    <strong>⚠ DOSSIER RECALLED (Version v{{ case.dossier_version }}.0):</strong>
-    This case was recalled post-release. Prior delivery links are revoked.
-    {% if case.rework_reason %}
-    <br><span class="text-xs">Reason: {{ case.rework_reason }}</span>
-    {% endif %}
-  </div>
-  {% endif %}
+<!-- 3-Pane Workbench Layout -->
+<div class="workbench-grid">
 
-  <div style="display:grid;grid-template-columns:1fr 340px;gap:1.5rem;align-items:start;">
+  <!-- ========================================================================= -->
+  <!-- PANE 1: LEFT RAIL (Case Anchor & Disambiguation Profile)                  -->
+  <!-- ========================================================================= -->
+  <div class="workbench-pane-left">
 
-    {# ── Left Column: Case Details & Workflow Action ─────────── #}
-    <div>
+    <!-- Subject Disambiguation Profile Card -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Subject Anchor</span>
+        <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('edit-profile-modal').style.display = document.getElementById('edit-profile-modal').style.display === 'none' ? 'block' : 'none';">Edit</button>
+      </div>
 
-      {# ── Summary Card ───────────────────────────────────────── #}
-      <div class="card">
-        <div class="flex justify-between items-center mb-3">
-          <div>
-            <div class="font-mono" style="font-size:20px;font-weight:900;letter-spacing:.03em;">
-              {{ case.case_ref }}
-              <span class="badge" style="font-size:12px;margin-left:.5rem;">v{{ case.dossier_version }}.0</span>
-              {% set stage_slug = case.stage | lower | replace('_', '-') %}
-              <span class="badge badge-{{ stage_slug }}" style="font-size:12px;margin-left:.25rem;">{{ case.stage | replace('_', ' ') }}</span>
-            </div>
-            <div class="text-muted text-sm mt-1">Client: <strong>{{ case.client_name }}</strong></div>
-          </div>
-          <a href="/cases" class="btn btn-secondary btn-sm">← Back to Cases</a>
-        </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem 1.5rem;background:#f8fafc;padding:1rem;border-radius:6px;border:1px solid #e2e8f0;">
-          <div>
-            <div class="section-label" style="margin-top:0;">Subject Type</div>
-            <div><strong>{{ case.subject_type | upper }}</strong></div>
-          </div>
-          <div>
-            <div class="section-label" style="margin-top:0;">Subject Name</div>
-            <div><strong>{{ case.subject_name }}</strong></div>
-          </div>
-          {% if case.subject_identifier %}
-          <div>
-            <div class="section-label">Subject Registry CIN / ID</div>
-            <div class="font-mono text-sm">{{ case.subject_identifier }}</div>
-          </div>
+      <div class="kv-grid">
+        <span class="kv-lbl">Name:</span><span class="kv-val" style="font-weight: 700;">{{ case.subject_name }}</span>
+        <span class="kv-lbl">Type:</span><span class="kv-val">{{ case.subject_type | upper }}</span>
+        <span class="kv-lbl">Primary ID:</span><span class="kv-val mono">{{ case.subject_identifier or '—' }}</span>
+        <span class="kv-lbl">MCA DIN:</span><span class="kv-val mono">{{ case.subject_din or '—' }}</span>
+        <span class="kv-lbl">PAN/GSTIN:</span><span class="kv-val mono">{{ case.subject_pan_or_gstin or '—' }}</span>
+        <span class="kv-lbl">DOB/Year:</span><span class="kv-val mono">{{ case.subject_dob_or_year or '—' }}</span>
+        <span class="kv-lbl">Father/Spouse:</span><span class="kv-val">{{ case.subject_father_or_spouse or '—' }}</span>
+        <span class="kv-lbl">Address:</span><span class="kv-val">{{ case.subject_address or '—' }}</span>
+        <span class="kv-lbl">City:</span><span class="kv-val">{{ case.subject_city or '—' }}</span>
+        <span class="kv-lbl">AI Mode:</span>
+        <span class="kv-val">
+          {% if case.ai_enabled %}
+          <span style="color: var(--accent-cyan); font-family: var(--font-mono); font-size: 11px;">ENABLED</span>
+          {% else %}
+          <span style="color: var(--text-muted); font-family: var(--font-mono); font-size: 11px;">BYPASSED (OFF)</span>
           {% endif %}
-          <div>
-            <div class="section-label">Permissible Purpose</div>
-            <div>{{ case.purpose | replace('_', ' ') | title }}</div>
+        </span>
+      </div>
+
+      <!-- Collapsible Profile Edit Form -->
+      <div id="edit-profile-modal" style="display: none; margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed var(--border-subtle);">
+        <form method="post" action="/cases/{{ case.id }}/subject_profile">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <div class="form-group mb-2">
+            <label style="font-size: 10px;">MCA DIN (8 digits)</label>
+            <input type="text" name="subject_din" value="{{ case.subject_din or '' }}" placeholder="e.g. 01234567" class="mono" style="font-size: 11px; padding: 4px 6px;">
           </div>
-          <div>
-            <div class="section-label">Client Governance</div>
-            <div class="text-xs">
-              {% if case.client_kyc_verified and case.msa_signed %}
-              <span style="color:#15803d;font-weight:700;">✓ KYC & MSA Verified</span>
-              {% else %}
-              <span style="color:#b45309;font-weight:700;">⚠ KYC/MSA Pending</span>
-              {% endif %}
-            </div>
+          <div class="form-group mb-2">
+            <label style="font-size: 10px;">PAN or GSTIN</label>
+            <input type="text" name="subject_pan_or_gstin" value="{{ case.subject_pan_or_gstin or '' }}" placeholder="e.g. ABCDE1234F" class="mono" style="font-size: 11px; padding: 4px 6px;">
           </div>
-          <div>
-            <div class="section-label">Assigned Operator</div>
-            <div>{{ case.operator.full_name if case.operator else '—' }}</div>
+          <div class="form-group mb-2">
+            <label style="font-size: 10px;">DOB or Reg Year</label>
+            <input type="text" name="subject_dob_or_year" value="{{ case.subject_dob_or_year or '' }}" placeholder="e.g. 1982" class="mono" style="font-size: 11px; padding: 4px 6px;">
           </div>
-          <div>
-            <div class="section-label">Assigned Reviewer</div>
-            <div>{{ case.reviewer.full_name if case.reviewer else '<span class="text-muted text-xs">Unassigned</span>' | safe }}</div>
+          <div class="form-group mb-2">
+            <label style="font-size: 10px;">Father / Spouse</label>
+            <input type="text" name="subject_father_or_spouse" value="{{ case.subject_father_or_spouse or '' }}" placeholder="e.g. Ramesh Kumar" style="font-size: 11px; padding: 4px 6px;">
           </div>
-          {% if case.purpose == PurposeEnum.employee_screening_with_consent.value %}
-          <div>
-            <div class="section-label">Consent Token</div>
-            <div>
-              {% if case.consent_verified %}
-              <span style="color:#15803d;font-weight:700;">✓ Verified</span>
-              {% else %}
-              <span style="color:#b45309;font-weight:700;">⏳ Pending Verification</span>
-              {% endif %}
-            </div>
+          <div class="form-group mb-2">
+            <label style="font-size: 10px;">Registered Address</label>
+            <input type="text" name="subject_address" value="{{ case.subject_address or '' }}" placeholder="e.g. Nariman Point, Mumbai" style="font-size: 11px; padding: 4px 6px;">
           </div>
+          <div class="form-group mb-2">
+            <label style="font-size: 10px;">City</label>
+            <input type="text" name="subject_city" value="{{ case.subject_city or '' }}" placeholder="e.g. Mumbai" style="font-size: 11px; padding: 4px 6px;">
+          </div>
+          <div class="form-group mb-2">
+            <label style="font-size: 10px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" name="ai_enabled" value="true" {% if case.ai_enabled %}checked{% endif %} style="width: auto;">
+              Enable Sandboxed AI Claim Extraction
+            </label>
+          </div>
+          <button type="submit" class="btn btn-cyan btn-sm" style="width: 100%;">Save Anchor</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Personnel & Governance Card -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Personnel &amp; Control</span>
+      </div>
+
+      <div class="kv-grid" style="margin-bottom: 0.75rem;">
+        <span class="kv-lbl">Operator:</span><span class="kv-val">{{ case.operator.full_name if case.operator else '—' }}</span>
+        <span class="kv-lbl">Reviewer:</span>
+        <span class="kv-val">
+          {% if case.reviewer %}
+          <span style="color: var(--accent-cyan); font-weight: 600;">{{ case.reviewer.full_name }}</span>
+          {% else %}
+          <span style="color: var(--accent-amber); font-style: italic;">Unassigned</span>
           {% endif %}
-        </div>
-
-        {# ── Compliance Admin Actions: Reviewer & Consent ────── #}
-        {% if is_admin %}
-        <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid #e2e8f0;">
-          <div class="section-label" style="margin-top:0;">Compliance Administration</div>
-
-          <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;">
-            {# Reviewer Assignment Form #}
-            {% if reviewers and case.stage not in ('CLOSED', 'RECALLED') %}
-            <form method="post" action="/cases/{{ case.id }}/assign_reviewer" style="display:flex;gap:.5rem;align-items:center;">
-              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-              <select name="reviewer_id" required style="width:auto;font-size:12px;padding:.3rem .5rem;">
-                <option value="" disabled {% if not case.reviewer_id %}selected{% endif %}>Assign Reviewer…</option>
-                {% for r in reviewers %}
-                <option value="{{ r.id }}" {% if case.reviewer_id == r.id %}selected{% endif %}>{{ r.full_name }} (Reviewer)</option>
-                {% endfor %}
-              </select>
-              <button type="submit" class="btn btn-secondary btn-sm">Assign Reviewer</button>
-            </form>
-            {% endif %}
-
-            {# Consent Verification Form #}
-            {% if case.purpose == PurposeEnum.employee_screening_with_consent.value and not case.consent_verified %}
-            <form method="post" action="/cases/{{ case.id }}/verify_consent" style="display:inline;">
-              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-              <button type="submit" class="btn btn-warning btn-sm">✓ Verify Consent Token</button>
-            </form>
-            {% endif %}
-
-            {# Client KYC/MSA Verification Form #}
-            {% if not case.client_kyc_verified or not case.msa_signed %}
-            <form method="post" action="/cases/{{ case.id }}/verify_client" style="display:inline;">
-              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-              <button type="submit" class="btn btn-warning btn-sm">✓ Verify Client KYC & MSA</button>
-            </form>
-            {% endif %}
-
-            {# Approve Intake button for Compliance Gate #}
-            {% if case.stage == 'COMPLIANCE_GATE' %}
-            <form method="post" action="/cases/{{ case.id }}/approve_intake" style="display:inline;">
-              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-              <button type="submit" class="btn btn-success btn-sm">Approve Intake → COLLECT</button>
-            </form>
-            {% endif %}
-          </div>
-        </div>
+        </span>
+        <span class="kv-lbl">Purpose:</span><span class="kv-val">{{ case.purpose | replace('_', ' ') | title }}</span>
+        {% if case.purpose == PurposeEnum.employee_screening_with_consent.value %}
+        <span class="kv-lbl">Consent:</span>
+        <span class="kv-val">
+          {% if case.consent_verified %}
+          <span style="color: var(--accent-green);">&check; Verified</span>
+          {% else %}
+          <span style="color: var(--accent-amber);">&excl; Required</span>
+          {% endif %}
+        </span>
         {% endif %}
       </div>
 
-      {# ── NEXT ACTION DIRECTIVE CARD ─────────────────────────── #}
-      <div class="card">
-        <div class="card-title">NEXT ACTION DIRECTIVE</div>
+      <!-- Compliance Admin Personnel Controls -->
+      {% if is_admin and case.stage not in ('CLOSED', 'RECALLED') %}
+      <div style="border-top: 1px dashed var(--border-hairline); padding-top: 0.75rem; margin-top: 0.75rem;">
+        <div style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); text-transform: uppercase; margin-bottom: 6px;">Assign Reviewer</div>
+        <form method="post" action="/cases/{{ case.id }}/assign_reviewer" style="display: flex; gap: 4px;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <select name="reviewer_id" required style="font-size: 11px; padding: 4px 6px;">
+            <option value="" disabled {% if not case.reviewer_id %}selected{% endif %}>Select reviewer...</option>
+            {% for r in reviewers %}
+            <option value="{{ r.id }}" {% if case.reviewer_id == r.id %}selected{% endif %}>{{ r.full_name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="btn btn-outline btn-sm">Assign</button>
+        </form>
 
-        {# Directive Banner #}
-        {% if case.stage == 'INTAKE_DRAFT' %}
-          <div class="alert alert-info">
-            <strong>Next Action:</strong> Advance this intake draft to Compliance Gate.
-          </div>
-        {% elif case.stage == 'COMPLIANCE_GATE' %}
-          <div class="alert alert-warning">
-            <strong>Next Action:</strong> Compliance Administrator approval required before collection can begin.
-            {% if case.purpose == PurposeEnum.employee_screening_with_consent.value and not case.consent_verified %}
-            <br><em>Consent token must be verified first.</em>
-            {% endif %}
-          </div>
-        {% elif case.stage == 'COLLECT' %}
-          <div class="alert alert-info">
-            <strong>Next Action:</strong> Operator executes Source Charter collection modules and advances to Claim Extraction.
-          </div>
-        {% elif case.stage == 'CLAIM_EXTRACTION' %}
-          <div class="alert alert-info">
-            <strong>Next Action:</strong> Operator reviews atomic claims citing accepted evidence snapshots and advances to Correlation.
-          </div>
-        {% elif case.stage == 'CORRELATION_AND_SCORING' %}
-          <div class="alert alert-info">
-            <strong>Next Action:</strong> Operator verifies entity resolution match tiers and clusters finding groups.
-            {% if not case.reviewer_id %}
-            <br><strong>Requirement:</strong> Compliance Administrator must assign a Reviewer before advancing to Independent Review.
-            {% endif %}
-          </div>
-        {% elif case.stage == 'INDEPENDENT_REVIEW' %}
-          <div class="alert alert-warning">
-            <strong>Next Action:</strong> Independent Reviewer (<strong>{{ case.reviewer.full_name if case.reviewer else 'Unassigned' }}</strong>) inspects claims, verifies Section 7 adverse finding criteria, and approves or returns for rework.
-          </div>
-        {% elif case.stage == 'BUILD_AND_QA' %}
-          <div class="alert alert-info">
-            <strong>Next Action:</strong> Assemble versioned intelligence dossier (v{{ case.dossier_version }}.0), Coverage Manifest, and submit for Release Gate sign-off.
-          </div>
-        {% elif case.stage == 'RELEASE_GATE' %}
-          <div class="alert alert-warning">
-            <strong>Next Action:</strong> Compliance Administrator reviews compiled dossier and signs off for final release and closure.
-          </div>
-        {% elif case.stage == 'CLOSED' %}
-          <div class="alert alert-success">
-            <strong>Status:</strong> Case dossier is officially released and closed.
-          </div>
-        {% elif case.stage == 'RECALLED' %}
-          <div class="alert alert-warning">
-            <strong>Status:</strong> Dossier recalled. Compliance Administrator must reopen case in COLLECT or INDEPENDENT_REVIEW.
-          </div>
+        {% if not case.client_kyc_verified or not case.msa_signed %}
+        <form method="post" action="/cases/{{ case.id }}/verify_client" style="margin-top: 6px;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button type="submit" class="btn btn-outline btn-sm" style="width: 100%; color: var(--accent-amber);">&check; Verify Client KYC &amp; MSA</button>
+        </form>
         {% endif %}
 
-        {# ── Primary Advance Action ───────────────────────────── #}
+        {% if case.purpose == PurposeEnum.employee_screening_with_consent.value and not case.consent_verified %}
+        <form method="post" action="/cases/{{ case.id }}/verify_consent" style="margin-top: 6px;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button type="submit" class="btn btn-outline btn-sm" style="width: 100%; color: var(--accent-amber);">&check; Verify Subject Consent</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- PANE 2: CENTER CANVAS (Active Stage Intelligence Workbench)               -->
+  <!-- ========================================================================= -->
+  <div class="workbench-pane-center">
+
+    <!-- Top Stage Directive Banner -->
+    <div class="directive-banner {% if not can_advance %}blocked{% endif %}">
+      <div>
+        <div class="directive-title">Stage {{ STAGE_ORDER.index(case.stage) + 1 if case.stage in STAGE_ORDER else '—' }} Directive // {{ case.stage | replace('_', ' ') }}</div>
+        <div class="directive-desc">
+          {% if case.stage == 'INTAKE_DRAFT' %}
+            Operator completes intake anchors and submits case to Compliance Gate.
+          {% elif case.stage == 'COMPLIANCE_GATE' %}
+            Compliance Administrator reviews client KYC, MSA, and employee screening consent before authorizing collection.
+          {% elif case.stage == 'COLLECT' %}
+            Operator executes chartered sources (RDAP / Manual Capture) and triages all captured records.
+          {% elif case.stage == 'CLAIM_EXTRACTION' %}
+            Run sandboxed AI or deterministic extraction against ACCEPTED records, or author manual atomic claims.
+          {% elif case.stage == 'CORRELATION_AND_SCORING' %}
+            Execute Indian entity resolution, verify Two-Axis scores [Rel|Conf], and assign finding group clusters.
+          {% elif case.stage == 'INDEPENDENT_REVIEW' %}
+            Assigned Independent Reviewer inspects claims, applies Section 7 adverse rules, and approves or returns for rework.
+          {% elif case.stage == 'BUILD_AND_QA' %}
+            Compile the immutable 7-section intelligence dossier and verify document hashes before release.
+          {% elif case.stage == 'RELEASE_GATE' %}
+            Compliance Administrator conducts executive review and releases case with a 7-day cryptographic delivery token.
+          {% elif case.stage == 'CLOSED' %}
+            Case dossier is finalized, cryptographically verified, and released.
+          {% elif case.stage == 'RECALLED' %}
+            Dossier recalled post-release. Compliance Administrator must reopen case in COLLECT or INDEPENDENT_REVIEW.
+          {% endif %}
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 0.6rem; align-items: center;">
+        <!-- Primary Advance Button -->
         {% if can_advance and forward_target %}
-        <form method="post" action="/cases/{{ case.id }}/advance" class="mt-3">
+        <form method="post" action="/cases/{{ case.id }}/advance">
           <input type="hidden" name="_csrf" value="{{ csrf_token }}">
           <input type="hidden" name="to_stage" value="{{ forward_target }}">
-          <button type="submit" class="btn btn-primary" style="font-size:14px;padding:.6rem 1.4rem;">
-            Advance to {{ forward_target | replace('_', ' ') }} →
+          <button type="submit" class="btn btn-cyan">
+            Advance to {{ forward_target | replace('_', ' ') }} &rarr;
           </button>
         </form>
         {% elif case.stage == 'COLLECT' and collection_summary and collection_summary.requires_zero_findings_attestation and (is_operator or is_admin) %}
-        <form method="post" action="/cases/{{ case.id }}/advance" class="mt-3" style="background:#f8fafc;padding:1rem;border-radius:6px;border:1px solid #e2e8f0;">
+        <form method="post" action="/cases/{{ case.id }}/advance">
           <input type="hidden" name="_csrf" value="{{ csrf_token }}">
           <input type="hidden" name="to_stage" value="CLAIM_EXTRACTION">
-          <div class="mb-2">
-            <label style="font-weight:600;display:flex;align-items:center;gap:.5rem;cursor:pointer;">
-              <input type="checkbox" name="zero_findings_attested" value="true" required style="width:auto;">
-              Attest: No pertinent findings identified in the queried sources (Zero Accepted Records)
-            </label>
-          </div>
-          <button type="submit" class="btn btn-primary" style="font-size:14px;padding:.6rem 1.4rem;">
-            Advance to CLAIM EXTRACTION (with Zero Findings) →
+          <input type="hidden" name="zero_findings_attested" value="true">
+          <button type="submit" class="btn btn-cyan" onclick="return confirm('Attest that zero pertinent findings were found in queried sources?');">
+            Attest Zero Findings &rarr;
           </button>
         </form>
         {% elif advance_block_reason %}
-        <div class="alert alert-info mt-2" style="background:#f1f5f9;border-color:#cbd5e1;color:#475569;">
-          <strong>Action Blocked:</strong> {{ advance_block_reason }}
+        <div style="font-family: var(--font-mono); font-size: 11px; color: var(--accent-amber); max-width: 320px; text-align: right;">
+          &excl; {{ advance_block_reason }}
         </div>
         {% endif %}
 
-        {# ── Reopen Recalled Case (Admin Only) ───────────────── #}
-        {% if is_admin and case.stage == 'RECALLED' %}
-        <div class="mt-3" style="display:flex;gap:1rem;">
-          <form method="post" action="/cases/{{ case.id }}/advance">
-            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-            <input type="hidden" name="to_stage" value="COLLECT">
-            <button type="submit" class="btn btn-primary btn-sm">Reopen in COLLECT →</button>
-          </form>
-          <form method="post" action="/cases/{{ case.id }}/advance">
-            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-            <input type="hidden" name="to_stage" value="INDEPENDENT_REVIEW">
-            <button type="submit" class="btn btn-secondary btn-sm">Reopen in INDEPENDENT_REVIEW →</button>
-          </form>
-        </div>
+        <!-- Rework Trigger Button -->
+        {% if (is_reviewer and case.stage == 'INDEPENDENT_REVIEW') or (is_admin and case.stage in ('COMPLIANCE_GATE', 'RELEASE_GATE', 'BUILD_AND_QA')) %}
+        <button type="button" class="btn btn-outline" style="color: var(--accent-amber);" onclick="document.getElementById('rework-modal').style.display = document.getElementById('rework-modal').style.display === 'none' ? 'block' : 'none';">
+          Return for Rework &larr;
+        </button>
         {% endif %}
+      </div>
+    </div>
 
+    <!-- Collapsible Rework Justification Drawer -->
+    <div id="rework-modal" class="panel" style="display: none; border-left: 4px solid var(--accent-amber); margin-bottom: 1.5rem;">
+      <div class="panel-header">
+        <span class="panel-title" style="color: var(--accent-amber);">Return Case for Rework</span>
+      </div>
+      <form method="post" action="/cases/{{ case.id }}/rework">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="form-group mb-2">
+          <label>Target Stage</label>
+          <select name="to_stage" required style="max-width: 350px;">
+            {% if case.stage == 'INDEPENDENT_REVIEW' %}
+            <option value="CORRELATION_AND_SCORING">CORRELATION AND SCORING (Re-evaluate entity matching)</option>
+            <option value="COLLECT">COLLECT (Acquire additional source evidence)</option>
+            {% elif case.stage == 'RELEASE_GATE' %}
+            <option value="BUILD_AND_QA">BUILD AND QA (Rebuild dossier layout)</option>
+            <option value="INDEPENDENT_REVIEW">INDEPENDENT REVIEW (Re-conduct peer review)</option>
+            {% elif case.stage == 'BUILD_AND_QA' %}
+            <option value="INDEPENDENT_REVIEW">INDEPENDENT REVIEW (Return for re-review)</option>
+            {% elif case.stage == 'COMPLIANCE_GATE' %}
+            <option value="INTAKE_DRAFT">INTAKE DRAFT (Clarify scope/subject)</option>
+            {% endif %}
+          </select>
+        </div>
+        <div class="form-group mb-2">
+          <label>Mandatory Rework Justification (min 10 characters)</label>
+          <textarea name="rework_reason" required minlength="10" placeholder="Detail the exact deficiency requiring rework..."></textarea>
+        </div>
+        <button type="submit" class="btn btn-outline" style="color: var(--accent-amber);">Submit Rework ↩</button>
+      </form>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- DYNAMIC ACTIVE STAGE PANELS                                           -->
+    <!-- ===================================================================== -->
+
+    <!-- STAGE 3: COLLECT WORKBENCH -->
+    {% if case.stage == 'COLLECT' %}
+    <div class="panel" style="border-top: 3px solid var(--accent-cyan);">
+      <div class="panel-header">
+        <span class="panel-title">Execute Chartered Sources</span>
+        <span class="pill pill-role">Stage 3 // COLLECT</span>
       </div>
 
-      {# ── M2: SOURCE EXECUTION PANEL (Operator in COLLECT) ──── #}
-      {% if case.stage == 'COLLECT' and (is_operator or is_admin) %}
-      <div class="card" style="border-top:3px solid #2563eb;">
-        <div class="card-title">Execute Chartered Sources (Stage 3: COLLECT)</div>
-        <p class="text-xs text-muted mb-3">
-          Query authorized public registries and protocol endpoints under the CRICE Source Charter. Every execution is audited and logged in the Coverage Manifest.
-        </p>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;">
-
-          {# Module 1: Automated Domain RDAP #}
-          <div style="background:#f8fafc;padding:1.2rem;border-radius:6px;border:1px solid #e2e8f0;">
-            <div style="font-weight:700;font-size:13px;margin-bottom:.25rem;">
-              Module 1: Automated Domain RDAP
-              <span class="badge" style="background:#e0f2fe;color:#0369a1;margin-left:.25rem;">Tier A | Rel: A</span>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+        <!-- Module 1: Automated RDAP -->
+        <div class="panel" style="margin-bottom: 0;">
+          <div style="font-weight: 700; margin-bottom: 4px; color: #fff;">Module 1: Automated Domain RDAP</div>
+          <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px;">Authoritative ICANN / registry registration and DNS metadata.</p>
+          <form method="post" action="/cases/{{ case.id }}/collect/rdap">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <div class="form-group mb-2">
+              <label>Target Domain</label>
+              <input type="text" name="domain" required placeholder="e.g. acmetech.demo or google.com" class="mono">
             </div>
-            <div class="text-xs text-muted mb-3">Authoritative ICANN / Registry registration and DNS metadata.</div>
+            <button type="submit" class="btn btn-cyan btn-sm">▶ Run Domain RDAP</button>
+          </form>
+        </div>
 
-            <form method="post" action="/cases/{{ case.id }}/collect/rdap">
-              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-              <div class="form-group mb-2">
-                <label for="rdap_domain" style="font-size:12px;">Target Corporate Domain</label>
-                <input type="text" id="rdap_domain" name="domain" required placeholder="e.g. acmetech.demo or targetcorp.com"
-                       class="font-mono" style="font-size:13px;">
+        <!-- Module 2: Manual Capture -->
+        <div class="panel" style="margin-bottom: 0;">
+          <div style="font-weight: 700; margin-bottom: 4px; color: #fff;">Module 2: Manual Evidence Capture</div>
+          <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px;">Tamper-evident record snapshot with automatic SHA-256 seal.</p>
+          <form method="post" action="/cases/{{ case.id }}/collect/manual">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <div class="form-group mb-2">
+              <label>Chartered Source</label>
+              <select name="source_code" required>
+                {% for src in chartered_sources %}
+                {% if src.collection_mode == 'MANUAL_CAPTURE' %}
+                <option value="{{ src.code }}">{{ src.code }} – {{ src.name }} (Tier {{ src.tier }} | Rel: {{ src.default_reliability }})</option>
+                {% endif %}
+                {% endfor %}
+              </select>
+            </div>
+            <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 8px;" class="mb-2">
+              <div>
+                <label>Query Input</label>
+                <input type="text" name="query_input" required placeholder="CIN, DIN, GSTIN, Case No." class="mono">
               </div>
-              <button type="submit" class="btn btn-primary btn-sm">▶ Run Domain RDAP</button>
-            </form>
-          </div>
-
-          {# Module 2: Tamper-Evident Manual Capture #}
-          <div style="background:#f8fafc;padding:1.2rem;border-radius:6px;border:1px solid #e2e8f0;">
-            <div style="font-weight:700;font-size:13px;margin-bottom:.25rem;">
-              Module 2: Manual Evidence Capture
-              <span class="badge" style="background:#fef3c7;color:#92400e;margin-left:.25rem;">Chartered Registries</span>
-            </div>
-            <div class="text-xs text-muted mb-3">Tamper-evident record snapshot with automatic SHA-256 integrity seal.</div>
-
-            <form method="post" action="/cases/{{ case.id }}/collect/manual">
-              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-
-              <div class="form-group mb-2">
-                <label for="manual_source_code" style="font-size:12px;">Chartered Source</label>
-                <select id="manual_source_code" name="source_code" required style="font-size:12px;padding:.35rem .5rem;">
-                  {% for src in chartered_sources %}
-                  {% if src.collection_mode == 'MANUAL_CAPTURE' %}
-                  <option value="{{ src.code }}">{{ src.code }} – {{ src.name }} (Tier {{ src.tier }} | Rel: {{ src.default_reliability }})</option>
-                  {% endif %}
-                  {% endfor %}
+              <div>
+                <label>Outcome</label>
+                <select name="outcome" required>
+                  <option value="FOUND">FOUND</option>
+                  <option value="NOT_FOUND">NOT_FOUND</option>
+                  <option value="FAILED">FAILED</option>
                 </select>
               </div>
+            </div>
+            <div class="form-group mb-2">
+              <label>Evidence Title</label>
+              <input type="text" name="title" placeholder="e.g. MCA21 Master Data Snapshot">
+            </div>
+            <div class="form-group mb-2">
+              <label>Source URL</label>
+              <input type="url" name="source_url" placeholder="https://...">
+            </div>
+            <div class="form-group mb-2">
+              <label>Raw Content (min 20 chars if FOUND)</label>
+              <textarea name="raw_content" rows="3" placeholder="Paste official text or JSON extract..." class="mono"></textarea>
+            </div>
+            <button type="submit" class="btn btn-outline btn-sm">💾 Store Evidence Snapshot</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    {% endif %}
 
-              <div class="form-group mb-2" style="display:grid;grid-template-columns:2fr 1fr;gap:.5rem;">
-                <div>
-                  <label for="manual_query_input" style="font-size:12px;">Query / Registry Identifier</label>
-                  <input type="text" id="manual_query_input" name="query_input" required placeholder="e.g. CIN, DIN, GSTIN, Case No."
-                         style="font-size:12px;padding:.35rem .5rem;">
-                </div>
-                <div>
-                  <label for="manual_outcome" style="font-size:12px;">Outcome</label>
-                  <select id="manual_outcome" name="outcome" required style="font-size:12px;padding:.35rem .5rem;">
-                    <option value="FOUND">FOUND</option>
-                    <option value="NOT_FOUND">NOT_FOUND</option>
-                    <option value="FAILED">FAILED</option>
-                  </select>
-                </div>
-              </div>
+    <!-- STAGE 4: CLAIM EXTRACTION WORKBENCH -->
+    {% if case.stage == 'CLAIM_EXTRACTION' %}
+    <div class="panel" style="border-top: 3px solid var(--accent-cyan);">
+      <div class="panel-header">
+        <span class="panel-title">Claim Extraction &amp; Provenance Firewall</span>
+        <span class="pill pill-role">Stage 4 // CLAIM EXTRACTION</span>
+      </div>
 
-              <div class="form-group mb-2">
-                <label for="manual_title" style="font-size:12px;">Evidence Title (if FOUND)</label>
-                <input type="text" id="manual_title" name="title" placeholder="e.g. MCA21 Master Data Snapshot"
-                       style="font-size:12px;padding:.35rem .5rem;">
-              </div>
+      <!-- Trigger AI Claim Extraction -->
+      <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1.5rem; background: var(--bg-surface); padding: 1rem; border-radius: 6px; border: 1px solid var(--border-hairline);">
+        <div style="flex: 1;">
+          <strong style="color: #fff; font-size: 13px;">Execute Sandboxed Claim Extraction</strong>
+          <p style="font-size: 11px; color: var(--text-muted); margin: 2px 0 0 0;">Extracts atomic triples with strict verbatim quote grounding across ACCEPTED evidence records.</p>
+        </div>
+        <form method="post" action="/cases/{{ case.id }}/claims/extract">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button type="submit" class="btn btn-cyan">▶ Run Claim Extraction</button>
+        </form>
+      </div>
 
-              <div class="form-group mb-2">
-                <label for="manual_url" style="font-size:12px;">Official Source URL (if FOUND)</label>
-                <input type="url" id="manual_url" name="source_url" placeholder="https://www.mca.gov.in/..."
-                       style="font-size:12px;padding:.35rem .5rem;">
-              </div>
-
-              <div class="form-group mb-2">
-                <label for="manual_raw" style="font-size:12px;">Raw Content Snapshot (min 20 chars if FOUND)</label>
-                <textarea id="manual_raw" name="raw_content" rows="3" placeholder="Paste official text or JSON extract..."
-                          class="font-mono text-xs" style="padding:.35rem .5rem;"></textarea>
-              </div>
-
-              <button type="submit" class="btn btn-secondary btn-sm">💾 Store Manual Capture</button>
-            </form>
+      <!-- Manual Claim Authoring Form -->
+      <details class="panel" style="margin-bottom: 1.5rem;">
+        <summary style="font-size: 12px; font-weight: 700; color: var(--accent-cyan); cursor: pointer;">+ Author Manual Atomic Claim</summary>
+        <form method="post" action="/cases/{{ case.id }}/claims/manual" style="margin-top: 1rem;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;" class="mb-2">
+            <div>
+              <label>Subject Entity</label>
+              <input type="text" name="subject_entity" value="{{ case.subject_name }}" required>
+            </div>
+            <div>
+              <label>Predicate (e.g. DIRECTOR_OF, REGISTERED_AT)</label>
+              <input type="text" name="predicate" placeholder="FACT_REPORTED" required class="mono">
+            </div>
           </div>
+          <div class="form-group mb-2">
+            <label>Object Value / Finding</label>
+            <textarea name="object_value" rows="2" placeholder="Specific reported fact..." required></textarea>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;" class="mb-2">
+            <div>
+              <label>Cited Primary Record (ACCEPTED only)</label>
+              <select name="primary_record_id" required>
+                {% for r in records %}
+                {% if r.triage_status == 'ACCEPTED' %}
+                <option value="{{ r.id }}">#{{ r.id }} – {{ r.title }} ({{ r.source.code if r.source else 'SRC' }})</option>
+                {% endif %}
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label>Finding Group Key</label>
+              <input type="text" name="finding_group_key" placeholder="e.g. fg_directorships" class="mono">
+            </div>
+          </div>
+          <div class="form-group mb-2">
+            <label>Verbatim Quote from Source</label>
+            <input type="text" name="verbatim_quote" placeholder="Exact substring from evidence record...">
+          </div>
+          <div style="display: flex; gap: 1rem; align-items: center;" class="mb-3">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--accent-crimson); font-weight: 700;">
+              <input type="checkbox" name="is_adverse" value="true" style="width: auto;">
+              Adverse Finding Flag
+            </label>
+            <select name="adverse_category" style="max-width: 200px;">
+              <option value="">Category (if adverse)...</option>
+              <option value="FRAUD">FRAUD</option>
+              <option value="CONVICTION">CONVICTION</option>
+              <option value="DEFAULT">DEFAULT</option>
+              <option value="SANCTIONS">SANCTIONS</option>
+              <option value="LITIGATION_ACCUSED">LITIGATION_ACCUSED</option>
+              <option value="REGULATORY_PENALTY">REGULATORY_PENALTY</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-outline btn-sm">Author Manual Claim</button>
+        </form>
+      </details>
+    </div>
+    {% endif %}
 
+    <!-- STAGE 5: CORRELATION & SCORING WORKBENCH -->
+    {% if case.stage == 'CORRELATION_AND_SCORING' %}
+    <div class="panel" style="border-top: 3px solid var(--accent-cyan);">
+      <div class="panel-header">
+        <span class="panel-title">Entity Resolution &amp; Two-Axis Scoring</span>
+        <form method="post" action="/cases/{{ case.id }}/claims/resolve" style="display: inline;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button type="submit" class="btn btn-cyan btn-sm">▶ Re-Score Entity Matching</button>
+        </form>
+      </div>
+      <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 1.25rem;">
+        Indian name matching and hard identifier correlation against intake anchors. Verify Two-Axis scores [Reliability | Confidence] before submitting for Independent Review.
+      </p>
+    </div>
+    {% endif %}
+
+    <!-- STAGE 6: INDEPENDENT REVIEW WORKBENCH -->
+    {% if case.stage == 'INDEPENDENT_REVIEW' %}
+    <div class="panel" style="border-top: 3px solid var(--accent-amber);">
+      <div class="panel-header">
+        <span class="panel-title" style="color: var(--accent-amber);">Independent Reviewer Workspace</span>
+        <span class="pill pill-role" style="color: var(--accent-amber); border-color: rgba(255,179,0,0.4);">Stage 6 // PEER REVIEW</span>
+      </div>
+
+      <div style="background: rgba(255, 179, 0, 0.08); border-left: 3px solid var(--accent-amber); padding: 10px 14px; border-radius: 4px; margin-bottom: 1.25rem; font-size: 12px; color: #ffd066;">
+        <strong>Section 7 Adverse-Claim Engine Notice:</strong> Adverse claims approved below will be automatically evaluated upon stage advance. Uncorroborated adverse claims (lacking Tier 1 match or multi-domain corroboration) will be strictly quarantined to <em>UNRESOLVED POSSIBLE MATCHES</em> in the final dossier.
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- STAGE 7: BUILD & QA WORKBENCH -->
+    {% if case.stage == 'BUILD_AND_QA' %}
+    <div class="panel" style="border-top: 3px solid var(--accent-cyan);">
+      <div class="panel-header">
+        <span class="panel-title">Build &amp; QA Dossier Compiler</span>
+        <span class="pill pill-role">Stage 7 // BUILD &amp; QA</span>
+      </div>
+
+      <div style="display: flex; gap: 1rem; align-items: center; justify-content: space-between; background: var(--bg-surface); padding: 1.25rem; border-radius: 6px; border: 1px solid var(--border-hairline); margin-bottom: 1.5rem;">
+        <div>
+          <strong style="font-size: 14px; color: #fff;">Dossier Compiler (v{{ case.dossier_version }}.0)</strong>
+          <p style="font-size: 11px; color: var(--text-muted); margin: 2px 0 0 0;">Assembles 7 mandatory sections, signs SHA-256 integrity hash, and generates valid PDF bytes.</p>
+        </div>
+        <form method="post" action="/cases/{{ case.id }}/dossier/compile">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button type="submit" class="btn btn-cyan">Compile Dossier (v{{ case.dossier_version }}.0)</button>
+        </form>
+      </div>
+
+      {% if active_dossier and active_dossier.version == (case.dossier_version or 1) %}
+      <div class="panel" style="background: rgba(0, 240, 255, 0.03); border: 1px solid rgba(0, 240, 255, 0.3);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <div>
+            <span style="color: var(--accent-green); font-family: var(--font-mono); font-weight: 700; font-size: 12px;">&check; DOSSIER v{{ active_dossier.version }}.0 COMPILED</span>
+            <div style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); margin-top: 2px;">
+              SHA-256: {{ active_dossier.dossier_hash }}
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <a href="/cases/{{ case.id }}/dossier/preview" target="_blank" class="btn btn-outline btn-sm">Preview HTML &rarr;</a>
+            <a href="/cases/{{ case.id }}/dossier/pdf" class="btn btn-cyan btn-sm">Download PDF</a>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 12px;">
+          <div style="background: var(--bg-surface); padding: 10px; border-radius: 4px; border: 1px solid var(--border-hairline);">
+            <span style="color: var(--text-muted); font-size: 11px;">Confirmed Findings:</span>
+            <strong style="color: var(--accent-green); font-size: 16px; display: block; margin-top: 4px;">{{ active_dossier.confirmed_findings_count }}</strong>
+          </div>
+          <div style="background: var(--bg-surface); padding: 10px; border-radius: 4px; border: 1px solid var(--border-hairline);">
+            <span style="color: var(--text-muted); font-size: 11px;">Quarantined Matches:</span>
+            <strong style="color: var(--accent-amber); font-size: 16px; display: block; margin-top: 4px;">{{ active_dossier.unresolved_matches_count }}</strong>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- STAGE 8 & 9: RELEASE GATE & CLOSED WORKBENCH -->
+    {% if case.stage in ('RELEASE_GATE', 'CLOSED', 'RECALLED') %}
+    <div class="panel" style="border-top: 3px solid {% if case.stage == 'CLOSED' %}var(--accent-green){% elif case.stage == 'RECALLED' %}var(--accent-crimson){% else %}var(--accent-amber){% endif %};">
+      <div class="panel-header">
+        <span class="panel-title">Release Gate &amp; Secure Delivery</span>
+        <span class="pill" style="background: var(--bg-panel); color: var(--accent-cyan);">{{ case.stage | replace('_', ' ') }}</span>
+      </div>
+
+      {% if active_dossier and active_dossier.delivery_token %}
+      <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 1.25rem; margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem;">
+          <div>
+            <strong style="font-size: 13px; color: var(--accent-green);">&check; SECURE DELIVERY TOKEN ACTIVE</strong>
+            <p style="font-size: 11px; color: var(--text-muted); margin: 2px 0 0 0;">Valid for 7 days from executive release sign-off.</p>
+          </div>
+          <a href="/cases/{{ case.id }}/dossier/pdf" class="btn btn-cyan btn-sm">Download Official PDF</a>
+        </div>
+
+        <div style="margin-bottom: 0.75rem;">
+          <label style="font-size: 10px;">Public Verification Link</label>
+          <div style="display: flex; gap: 6px;">
+            <input type="text" readonly value="/dossier/verify/{{ active_dossier.delivery_token }}" class="mono" style="font-size: 11px;">
+            <a href="/dossier/verify/{{ active_dossier.delivery_token }}" target="_blank" class="btn btn-outline btn-sm">Verify</a>
+          </div>
+        </div>
+
+        <div class="kv-grid" style="font-size: 11px;">
+          <span class="kv-lbl">Expires:</span><span class="kv-val mono">{{ active_dossier.delivery_expires_at.strftime('%Y-%m-%d %H:%M UTC') if active_dossier.delivery_expires_at else '—' }}</span>
+          <span class="kv-lbl">Dossier Hash:</span><span class="kv-val mono">{{ active_dossier.dossier_hash }}</span>
         </div>
       </div>
       {% endif %}
 
-      {# ── COVERAGE MANIFEST (Source Runs Live Table) ─────────── #}
-      <div class="card">
-        <div class="flex justify-between items-center mb-2">
-          <div class="card-title" style="margin-bottom:0;">Coverage Manifest</div>
-          <span class="badge" style="background:#f1f5f9;color:#334155;">{{ source_runs | length }} Run(s)</span>
-        </div>
-        <p class="text-xs text-muted mb-3">
-          Immutable log of all automated and manual collection executions against chartered sources.
-        </p>
+      <!-- Compliance Admin Post-Release Recall Trigger -->
+      {% if is_admin and case.stage == 'CLOSED' %}
+      <div style="border-top: 1px dashed rgba(255,42,84,0.4); padding-top: 1rem; margin-top: 1rem;">
+        <span style="font-family: var(--font-mono); font-size: 11px; color: var(--accent-crimson); font-weight: 700;">POST-RELEASE RECALL MECHANISM</span>
+        <p style="font-size: 11px; color: var(--text-muted); margin: 4px 0 10px 0;">Revokes active delivery token, invalidates issued dossier hash, and reopens case.</p>
+        <form method="post" action="/cases/{{ case.id }}/recall" style="display: flex; gap: 8px;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <select name="reopen_to_stage" required style="max-width: 220px; font-size: 11px;">
+            <option value="COLLECT">Reopen in COLLECT</option>
+            <option value="INDEPENDENT_REVIEW">Reopen in INDEPENDENT_REVIEW</option>
+          </select>
+          <input type="text" name="recall_reason" required minlength="10" placeholder="Recall reason (min 10 chars)..." style="flex: 1; font-size: 11px;">
+          <button type="submit" class="btn btn-crimson btn-sm" onclick="return confirm('Confirm revocation and recall of this dossier?');">Recall Dossier</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
 
-        {% if source_runs %}
-        <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;font-size:12px;">
-            <thead>
-              <tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;text-align:left;">
-                <th style="padding:.5rem .75rem;">Source</th>
-                <th style="padding:.5rem .75rem;">Tier / Rel</th>
-                <th style="padding:.5rem .75rem;">Query Input</th>
-                <th style="padding:.5rem .75rem;">Status</th>
-                <th style="padding:.5rem .75rem;">Executed At (UTC)</th>
-                <th style="padding:.5rem .75rem;">Error / Diagnostics</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for run in source_runs %}
-              <tr style="border-bottom:1px solid #f1f5f9;">
-                <td style="padding:.5rem .75rem;font-weight:700;">{{ run.source.code if run.source else 'UNKNOWN' }}</td>
-                <td style="padding:.5rem .75rem;">
-                  {% if run.source %}
-                  <span class="badge" style="font-size:10px;">Tier {{ run.source.tier }} | Rel {{ run.source.default_reliability }}</span>
-                  {% endif %}
-                </td>
-                <td style="padding:.5rem .75rem;" class="font-mono">{{ run.query_input }}</td>
-                <td style="padding:.5rem .75rem;">
-                  {% if run.status == 'FOUND' %}
-                  <span class="badge" style="background:#dcfce7;color:#166534;">✓ FOUND</span>
-                  {% elif run.status == 'NOT_FOUND' %}
-                  <span class="badge" style="background:#f1f5f9;color:#475569;">Ø NOT_FOUND</span>
-                  {% else %}
-                  <span class="badge" style="background:#fee2e2;color:#991b1b;">⚠ FAILED</span>
-                  {% endif %}
-                </td>
-                <td style="padding:.5rem .75rem;" class="text-muted">{{ run.completed_at.strftime('%Y-%m-%d %H:%M:%S UTC') if run.completed_at else '—' }}</td>
-                <td style="padding:.5rem .75rem;color:#b91c1c;max-width:240px;word-break:break-word;">
-                  {{ run.error_detail if run.error_detail else '—' }}
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        {% else %}
-        <div style="background:#f8fafc;padding:1.5rem;text-align:center;border-radius:6px;border:1px dashed #cbd5e1;color:#64748b;">
-          No source collection runs recorded yet. Execute Domain RDAP or a Manual Capture above.
-        </div>
-        {% endif %}
+    <!-- ===================================================================== -->
+    <!-- CLAIMS & INTELLIGENCE FINDINGS ACCORDION / STREAM                     -->
+    <!-- ===================================================================== -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Atomic Intelligence Claims</span>
+        <span class="badge font-mono" style="background: var(--bg-panel); color: var(--accent-cyan); font-size: 11px;">{{ claims | length }} Claim(s)</span>
       </div>
 
-      {# ── EVIDENCE VAULT & INLINE TRIAGE ────────────────────── #}
-      <div class="card">
-        <div class="flex justify-between items-center mb-2">
-          <div class="card-title" style="margin-bottom:0;">Evidence Vault & Inline Triage</div>
-          <span class="badge" style="background:#f1f5f9;color:#334155;">{{ records | length }} Record(s)</span>
-        </div>
-        <p class="text-xs text-muted mb-3">
-          Tamper-evident evidentiary payloads stored with cryptographically sealed SHA-256 hashes. Every record must be triaged as ACCEPTED or REJECTED before claim extraction.
-        </p>
+      {% if claims %}
+      <div>
+        {% for c in claims %}
+        <div class="finding-card {% if c.is_adverse %}adverse{% elif c.dossier_section == 'UNRESOLVED_POSSIBLE_MATCH' %}unresolved{% endif %}">
+          <div class="finding-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="finding-score-badge">[{{ c.source_reliability }}{{ c.identity_confidence }}]</span>
+              <strong style="color: #fff; font-size: 13px;">{{ c.predicate }}</strong>
+              {% if c.is_adverse %}
+              <span style="background: var(--accent-crimson-dim); color: var(--accent-crimson); border: 1px solid rgba(255,42,84,0.4); font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px; font-family: var(--font-mono);">
+                ADVERSE: {{ c.adverse_category or 'FLAGGED' }}
+              </span>
+              {% endif %}
+              <span style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);">
+                Tier: {{ c.match_tier }}
+              </span>
+            </div>
 
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <!-- Review Status Pill -->
+              {% if c.review_status == 'APPROVED' %}
+              <span style="color: var(--accent-green); font-family: var(--font-mono); font-size: 11px; font-weight: 700;">&check; APPROVED</span>
+              {% elif c.review_status == 'REJECTED' %}
+              <span style="color: var(--accent-crimson); font-family: var(--font-mono); font-size: 11px; font-weight: 700;">&cross; REJECTED</span>
+              {% else %}
+              <span style="color: var(--accent-amber); font-family: var(--font-mono); font-size: 11px; font-weight: 700;">&bull; PENDING REVIEW</span>
+              {% endif %}
+
+              <!-- Delete Claim (in CLAIM_EXTRACTION) -->
+              {% if case.stage == 'CLAIM_EXTRACTION' and (is_operator or is_admin) %}
+              <form method="post" action="/cases/{{ case.id }}/claims/{{ c.id }}/delete" style="display: inline;">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-outline btn-sm" style="color: var(--accent-crimson); padding: 1px 5px;">&times;</button>
+              </form>
+              {% endif %}
+            </div>
+          </div>
+
+          <!-- Finding Object Value -->
+          <div style="font-size: 13px; color: var(--text-primary); margin-bottom: 6px;">
+            {{ c.object_value }}
+          </div>
+
+          <!-- Verbatim Quote -->
+          {% if c.verbatim_quote %}
+          <div style="background: rgba(0, 240, 255, 0.04); border-left: 2px solid var(--accent-cyan); padding: 4px 10px; margin: 6px 0; font-size: 11px; color: #cbd5e1; font-style: italic;">
+            "{{ c.verbatim_quote }}"
+            {% if c.quote_verified %}
+            <span style="color: var(--accent-green); font-family: var(--font-mono); font-size: 10px; margin-left: 6px; font-style: normal;">&check; QUOTE GROUNDED</span>
+            {% endif %}
+          </div>
+          {% endif %}
+
+          <div style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); display: flex; justify-content: space-between; margin-top: 6px;">
+            <span>Rec #{{ c.primary_record_id }} &bull; Hash: {{ c.snapshot_hash[:16] }}...</span>
+            <span>Group: {{ c.finding_group_key or 'default' }} &bull; {{ c.extraction_method }}</span>
+          </div>
+
+          <!-- Correlation Scoring Controls (in CORRELATION_AND_SCORING) -->
+          {% if case.stage == 'CORRELATION_AND_SCORING' and (is_operator or is_admin) %}
+          <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-hairline);">
+            <form method="post" action="/cases/{{ case.id }}/claims/{{ c.id }}/score" style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <select name="match_tier" style="width: auto; font-size: 11px;">
+                <option value="TIER_1" {% if c.match_tier == 'TIER_1' %}selected{% endif %}>TIER_1 (Hard ID Exact)</option>
+                <option value="TIER_2" {% if c.match_tier == 'TIER_2' %}selected{% endif %}>TIER_2 (Multi-Attribute)</option>
+                <option value="TIER_3" {% if c.match_tier == 'TIER_3' %}selected{% endif %}>TIER_3 (Weak Match)</option>
+              </select>
+              <input type="number" name="identity_confidence" min="1" max="5" value="{{ c.identity_confidence if c.identity_confidence <= 5 else 3 }}" style="width: 70px; font-size: 11px;" title="Confidence 1-5">
+              <label style="display: flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer;">
+                <input type="checkbox" name="is_adverse" value="true" {% if c.is_adverse %}checked{% endif %} style="width: auto;">
+                Adverse
+              </label>
+              <select name="adverse_category" style="width: auto; font-size: 11px;">
+                <option value="">Category...</option>
+                <option value="FRAUD" {% if c.adverse_category == 'FRAUD' %}selected{% endif %}>FRAUD</option>
+                <option value="CONVICTION" {% if c.adverse_category == 'CONVICTION' %}selected{% endif %}>CONVICTION</option>
+                <option value="DEFAULT" {% if c.adverse_category == 'DEFAULT' %}selected{% endif %}>DEFAULT</option>
+                <option value="SANCTIONS" {% if c.adverse_category == 'SANCTIONS' %}selected{% endif %}>SANCTIONS</option>
+                <option value="LITIGATION_ACCUSED" {% if c.adverse_category == 'LITIGATION_ACCUSED' %}selected{% endif %}>LITIGATION_ACCUSED</option>
+                <option value="REGULATORY_PENALTY" {% if c.adverse_category == 'REGULATORY_PENALTY' %}selected{% endif %}>REGULATORY_PENALTY</option>
+              </select>
+              <input type="text" name="finding_group_key" value="{{ c.finding_group_key or '' }}" placeholder="Group key" class="mono" style="width: 110px; font-size: 11px;">
+              <button type="submit" class="btn btn-outline btn-sm">Update Score</button>
+            </form>
+          </div>
+          {% endif %}
+
+          <!-- Independent Review Controls (in INDEPENDENT_REVIEW) -->
+          {% if case.stage == 'INDEPENDENT_REVIEW' and is_reviewer %}
+          <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-hairline);">
+            <form method="post" action="/cases/{{ case.id }}/claims/{{ c.id }}/review" style="display: flex; gap: 8px; align-items: center;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <select name="review_status" required style="width: auto; font-size: 11px;">
+                <option value="APPROVED" {% if c.review_status == 'APPROVED' %}selected{% endif %}>APPROVE</option>
+                <option value="REJECTED" {% if c.review_status == 'REJECTED' %}selected{% endif %}>REJECT</option>
+              </select>
+              <input type="text" name="review_note" placeholder="Review note (min 5 chars if rejected)..." value="{{ c.review_note or '' }}" style="flex: 1; font-size: 11px;">
+              <button type="submit" class="btn btn-cyan btn-sm">Save Review</button>
+            </form>
+          </div>
+          {% endif %}
+
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="text-align: center; padding: 2rem 1rem; color: var(--text-muted); font-size: 12px;">
+        No claims extracted yet. Run claim extraction above to generate atomic findings.
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- EVIDENCE VAULT & INLINE TRIAGE ACCORDION                              -->
+    <!-- ===================================================================== -->
+    <details class="panel" {% if case.stage == 'COLLECT' %}open{% endif %}>
+      <summary style="font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer;">
+        Evidence Vault ({{ records | length }} Snapshots)
+      </summary>
+
+      <div style="margin-top: 1rem;">
         {% if records %}
-        <div style="display:flex;flex-direction:column;gap:1rem;">
+        <div style="display: flex; flex-direction: column; gap: 10px;">
           {% for rec in records %}
-          <div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid {% if rec.triage_status == 'ACCEPTED' %}#16a34a{% elif rec.triage_status == 'REJECTED' %}#dc2626{% else %}#d97706{% endif %};border-radius:6px;padding:1rem;">
-            <div class="flex justify-between items-center mb-2">
+          <div style="background: var(--bg-surface); border: 1px solid var(--border-hairline); border-left: 3px solid {% if rec.triage_status == 'ACCEPTED' %}var(--accent-green){% elif rec.triage_status == 'REJECTED' %}var(--accent-crimson){% else %}var(--accent-amber){% endif %}; padding: 10px; border-radius: 4px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
               <div>
-                <strong style="font-size:14px;">{{ rec.title }}</strong>
-                <span class="badge" style="margin-left:.5rem;font-size:11px;">{{ rec.source.code if rec.source else 'SOURCE' }}</span>
+                <strong style="color: #fff; font-size: 12px;">{{ rec.title }}</strong>
+                <span style="font-family: var(--font-mono); font-size: 10px; color: var(--accent-cyan); margin-left: 6px;">{{ rec.source.code if rec.source else 'SRC' }}</span>
               </div>
               <div>
                 {% if rec.triage_status == 'ACCEPTED' %}
-                <span class="badge" style="background:#dcfce7;color:#166534;font-size:12px;font-weight:700;">✓ ACCEPTED</span>
+                <span style="color: var(--accent-green); font-family: var(--font-mono); font-size: 10px; font-weight: 700;">&check; ACCEPTED</span>
                 {% elif rec.triage_status == 'REJECTED' %}
-                <span class="badge" style="background:#fee2e2;color:#991b1b;font-size:12px;font-weight:700;">✕ REJECTED</span>
+                <span style="color: var(--accent-crimson); font-family: var(--font-mono); font-size: 10px; font-weight: 700;">&cross; REJECTED</span>
                 {% else %}
-                <span class="badge" style="background:#fef3c7;color:#92400e;font-size:12px;font-weight:700;">⏳ PENDING TRIAGE</span>
+                <span style="color: var(--accent-amber); font-family: var(--font-mono); font-size: 10px; font-weight: 700;">&bull; PENDING TRIAGE</span>
                 {% endif %}
               </div>
             </div>
 
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;background:#f8fafc;padding:.75rem;border-radius:4px;font-size:12px;margin-bottom:.75rem;">
-              <div>
-                <span class="text-muted">Source URL:</span>
-                <a href="{{ rec.source_url }}" target="_blank" rel="noopener noreferrer" style="word-break:break-all;">{{ rec.source_url }}</a>
-              </div>
-              <div>
-                <span class="text-muted">Retrieved:</span>
-                <span>{{ rec.retrieved_at.strftime('%Y-%m-%d %H:%M:%S UTC') if rec.retrieved_at else '—' }}</span>
-              </div>
-              <div style="grid-column:1 / -1;">
-                <span class="text-muted">SHA-256 Hash:</span>
-                <span class="font-mono text-xs" style="color:#0f172a;background:#e2e8f0;padding:2px 6px;border-radius:3px;">{{ rec.snapshot_hash }}</span>
-              </div>
+            <div style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); margin-bottom: 6px;">
+              <span>SHA-256: {{ rec.snapshot_hash }}</span>
             </div>
 
-            {# Payload preview #}
-            <details style="margin-bottom:.75rem;">
-              <summary style="font-size:12px;font-weight:600;cursor:pointer;color:#2563eb;">View Raw Payload Snapshot ({{ rec.content_type }})</summary>
-              <pre style="background:#0f172a;color:#f8fafc;padding:.75rem;border-radius:4px;font-size:11px;overflow-x:auto;max-height:220px;margin-top:.5rem;">{{ rec.raw_content }}</pre>
-            </details>
-
-            {# Triage note display #}
-            {% if rec.triage_note %}
-            <div style="font-size:12px;background:#fef2f2;border:1px solid #fecaca;padding:.5rem .75rem;border-radius:4px;color:#991b1b;margin-bottom:.75rem;">
-              <strong>Triage Note:</strong> {{ rec.triage_note }}
-              {% if rec.triaged_by %}<span class="text-xs text-muted"> — by {{ rec.triaged_by.full_name }}</span>{% endif %}
-            </div>
-            {% endif %}
-
-            {# Inline Triage Actions for Operator in COLLECT #}
+            <!-- Triage Actions (in COLLECT) -->
             {% if case.stage == 'COLLECT' and (is_operator or is_admin) %}
-            <div style="display:flex;gap:1rem;align-items:center;padding-top:.5rem;border-top:1px dashed #e2e8f0;">
-              {# Accept #}
-              <form method="post" action="/cases/{{ case.id }}/records/{{ rec.id }}/triage" style="display:inline;">
+            <div style="display: flex; gap: 8px; align-items: center; padding-top: 6px; border-top: 1px dashed var(--border-hairline);">
+              <form method="post" action="/cases/{{ case.id }}/records/{{ rec.id }}/triage" style="display: inline;">
                 <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <input type="hidden" name="status" value="ACCEPTED">
-                <button type="submit" class="btn btn-success btn-sm" {% if rec.triage_status == 'ACCEPTED' %}disabled{% endif %}>
-                  ✓ Accept Record
-                </button>
+                <button type="submit" class="btn btn-outline btn-sm" style="color: var(--accent-green);" {% if rec.triage_status == 'ACCEPTED' %}disabled{% endif %}>&check; Accept</button>
               </form>
-
-              {# Reject with reason #}
-              <form method="post" action="/cases/{{ case.id }}/records/{{ rec.id }}/triage" style="display:flex;gap:.5rem;align-items:center;flex:1;">
+              <form method="post" action="/cases/{{ case.id }}/records/{{ rec.id }}/triage" style="display: flex; gap: 6px; flex: 1;">
                 <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <input type="hidden" name="status" value="REJECTED">
-                <input type="text" name="triage_note" placeholder="Rejection reason (min 5 chars)..." minlength="5" required
-                       style="font-size:12px;padding:.3rem .5rem;flex:1;"
-                       value="{% if rec.triage_status == 'REJECTED' %}{{ rec.triage_note or '' }}{% endif %}">
-                <button type="submit" class="btn btn-danger btn-sm">
-                  ✕ Reject Record
-                </button>
+                <input type="text" name="triage_note" placeholder="Rejection reason (min 5 chars)..." minlength="5" required style="font-size: 11px; padding: 2px 6px; flex: 1;" value="{% if rec.triage_status == 'REJECTED' %}{{ rec.triage_note or '' }}{% endif %}">
+                <button type="submit" class="btn btn-outline btn-sm" style="color: var(--accent-crimson);">&cross; Reject</button>
               </form>
             </div>
             {% endif %}
-
           </div>
           {% endfor %}
         </div>
         {% else %}
-        <div style="background:#f8fafc;padding:1.5rem;text-align:center;border-radius:6px;border:1px dashed #cbd5e1;color:#64748b;">
-          No evidence records captured yet. Execute a source collection module above.
+        <div style="text-align: center; padding: 1.5rem; color: var(--text-muted); font-size: 12px;">
+          No evidence snapshots captured yet.
         </div>
         {% endif %}
       </div>
+    </details>
 
-      {# ── REWORK CONTROLS (Reviewer / Admin) ───────────────── #}
-      {% if (is_reviewer and case.stage == 'INDEPENDENT_REVIEW') or (is_admin and case.stage in ('COMPLIANCE_GATE', 'RELEASE_GATE', 'BUILD_AND_QA')) %}
-      <div class="card" style="border-left:4px solid #d97706;">
-        <div class="card-title" style="color:#d97706;">Return Case for Rework</div>
-        <p class="text-muted text-xs mb-2">
-          Reject current stage and return dossier to an earlier workflow stage. A mandatory justification of at least 10 characters is required for the audit log.
-        </p>
+    <!-- ===================================================================== -->
+    <!-- COVERAGE MANIFEST TABLE ACCORDION                                     -->
+    <!-- ===================================================================== -->
+    <details class="panel">
+      <summary style="font-size: 12px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer;">
+        Chartered Coverage Manifest ({{ source_runs | length }} Runs)
+      </summary>
 
-        <form method="post" action="/cases/{{ case.id }}/rework">
-          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-
-          <div class="form-group">
-            <label for="rework_to_stage">Return Target Stage</label>
-            <select id="rework_to_stage" name="to_stage" required style="max-width:320px;">
-              {% if case.stage == 'INDEPENDENT_REVIEW' %}
-              <option value="CORRELATION_AND_SCORING">CORRELATION AND SCORING (Re-evaluate entity matching)</option>
-              <option value="COLLECT">COLLECT (Acquire additional source evidence)</option>
-              {% elif case.stage == 'RELEASE_GATE' %}
-              <option value="BUILD_AND_QA">BUILD AND QA (Rebuild dossier layout)</option>
-              <option value="INDEPENDENT_REVIEW">INDEPENDENT REVIEW (Re-conduct peer review)</option>
-              {% elif case.stage == 'BUILD_AND_QA' %}
-              <option value="INDEPENDENT_REVIEW">INDEPENDENT REVIEW (Return for re-review)</option>
-              {% elif case.stage == 'COMPLIANCE_GATE' %}
-              <option value="INTAKE_DRAFT">INTAKE DRAFT (Clarify scope/subject)</option>
-              {% endif %}
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label for="rework_reason">Mandatory Rework Justification (min 10 characters)</label>
-            <textarea id="rework_reason" name="rework_reason" required minlength="10" rows="3"
-                      placeholder="Specify the exact evidentiary deficiency, adverse finding conflict, or disambiguation gap requiring correction..."></textarea>
-          </div>
-
-          <button type="submit" class="btn btn-warning btn-sm">Return for Rework ↩</button>
-        </form>
-      </div>
-      {% endif %}
-
-      {# ── RECALL CONTROLS (Compliance Admin on CLOSED case) ─── #}
-      {% if is_admin and case.stage == 'CLOSED' %}
-      <div class="card" style="border-left:4px solid #dc2626;">
-        <div class="card-title" style="color:#dc2626;">Post-Release Recall Mechanism</div>
-        <p class="text-muted text-xs mb-2">
-          Revoke the released dossier and active delivery links. This increments the dossier version (to v{{ (case.dossier_version or 1) + 1 }}.0), logs an audited recall event, and reopens the case for correction.
-        </p>
-
-        <form method="post" action="/cases/{{ case.id }}/recall">
-          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-
-          <div class="form-group">
-            <label for="reopen_to_stage">Reopen Target Stage</label>
-            <select id="reopen_to_stage" name="reopen_to_stage" required style="max-width:320px;">
-              <option value="COLLECT">COLLECT (Acquire updated records & evidence)</option>
-              <option value="INDEPENDENT_REVIEW">INDEPENDENT REVIEW (Re-evaluate existing findings)</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label for="recall_reason">Mandatory Recall Justification (min 10 characters)</label>
-            <textarea id="recall_reason" name="recall_reason" required minlength="10" rows="3"
-                      placeholder="Detail the newly discovered contradictory evidence, legal challenge, or registry amendment necessitating dossier recall..."></textarea>
-          </div>
-
-          <button type="submit" class="btn btn-danger btn-sm">⚠ Execute Dossier Recall</button>
-        </form>
-      </div>
-      {% endif %}
-
-    </div>
-
-    {# ── Right Column: Immutable Activity Feed ───────────────── #}
-    <div>
-      <div class="card">
-        <div class="flex justify-between items-center mb-2">
-          <div class="card-title" style="margin-bottom:0;">Audit Trail</div>
-          <span class="text-xs text-muted font-mono">Live Sync</span>
+      <div style="margin-top: 1rem; overflow-x: auto;">
+        {% if source_runs %}
+        <table>
+          <thead>
+            <tr>
+              <th>Source</th>
+              <th>Tier/Rel</th>
+              <th>Query Input</th>
+              <th>Status</th>
+              <th>Executed (UTC)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for run in source_runs %}
+            <tr>
+              <td style="font-weight: 700; color: #fff;">{{ run.source.code if run.source else 'UNKNOWN' }}</td>
+              <td class="mono">Tier {{ run.source.tier if run.source else 'C' }} | Rel {{ run.source.default_reliability if run.source else 'C' }}</td>
+              <td class="mono">{{ run.query_input }}</td>
+              <td>
+                {% if run.status == 'FOUND' %}
+                <span style="color: var(--accent-green); font-weight: 700; font-family: var(--font-mono);">&check; FOUND</span>
+                {% elif run.status == 'NOT_FOUND' %}
+                <span style="color: var(--text-muted); font-family: var(--font-mono);">&empty; NOT FOUND</span>
+                {% else %}
+                <span style="color: var(--accent-crimson); font-family: var(--font-mono);">&excl; FAILED</span>
+                {% endif %}
+              </td>
+              <td class="mono" style="color: var(--text-muted);">{{ run.completed_at.strftime('%Y-%m-%d %H:%M') if run.completed_at else '—' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div style="text-align: center; padding: 1.5rem; color: var(--text-muted); font-size: 12px;">
+          No chartered source runs recorded yet.
         </div>
-        <p class="text-xs text-muted mb-2">Immutable server-enforced event ledger</p>
-        <div class="feed"
-             hx-get="/cases/{{ case.id }}/feed"
-             hx-trigger="every 30s"
-             hx-swap="innerHTML">
-          {% include "cases/_feed.html" %}
-        </div>
+        {% endif %}
       </div>
-    </div>
+    </details>
 
   </div>
+
+  <!-- ========================================================================= -->
+  <!-- PANE 3: RIGHT RAIL (Live Cryptographic Audit Feed)                        -->
+  <!-- ========================================================================= -->
+  <div class="workbench-pane-right">
+    <div class="panel-header" style="margin-bottom: 0.75rem;">
+      <span class="panel-title">Audit Trail</span>
+      <span style="font-family: var(--font-mono); font-size: 10px; color: var(--accent-cyan);">&bull; LIVE SYNC</span>
+    </div>
+    <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 1rem;">
+      Immutable cryptographically logged event ledger.
+    </p>
+
+    <div class="feed" hx-get="/cases/{{ case.id }}/feed" hx-trigger="every 15s" hx-swap="innerHTML">
+      {% include "cases/_feed.html" %}
+    </div>
+  </div>
+
 </div>
 {% endblock %}

@@ -3,22 +3,43 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}CRICE Lab{% endblock %}</title>
+  <title>{% block title %}CRICE // OPS LAB{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
 
 {% if current_user %}
 <nav class="navbar">
-  <a class="brand" href="/cases">CRICE Lab</a>
-  <a href="/cases">Cases</a>
+  <a class="brand-link" href="/cases">
+    <!-- CRICE C-Monogram with vertical slit -->
+    <span class="brand-monogram">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M19 5.5C17.2 3.8 14.8 2.8 12 2.8C6.9 2.8 2.8 6.9 2.8 12C2.8 17.1 6.9 21.2 12 21.2C14.8 21.2 17.2 20.2 19 18.5" stroke="#00F0FF" stroke-width="2.5" stroke-linecap="square"/>
+        <line x1="12" y1="1" x2="12" y2="23" stroke="#000000" stroke-width="2.5"/>
+        <line x1="12" y1="3" x2="12" y2="21" stroke="#00FF66" stroke-width="1.2"/>
+      </svg>
+    </span>
+    <span class="brand-title">CRICE <span>//</span> OPS TERMINAL</span>
+  </a>
+
+  <a class="nav-link" href="/cases">Cases</a>
+  <a class="nav-link" href="/cases/new">+ New Case</a>
   {% if current_user.role == 'compliance_admin' %}
-  <a href="/admin/users">Admin</a>
-  <a href="/audit">Audit Log</a>
+  <a class="nav-link" href="/admin/users">Admin</a>
+  <a class="nav-link" href="/audit">Audit Log</a>
   {% endif %}
+
   <span class="spacer"></span>
-  <span class="user-info">{{ current_user.full_name }} &middot; {{ current_user.role }}</span>
-  <a href="/logout">Sign out</a>
+
+  <div class="status-telemetry">
+    <span class="pill pill-role">{{ current_user.role }}</span>
+    <span class="pill pill-mfa">&bull; MFA SECURE</span>
+    <span style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">{{ current_user.full_name }}</span>
+    <a class="nav-link" style="color: var(--accent-crimson); margin-left: 8px;" href="/logout">Sign Out</a>
+  </div>
 </nav>
 {% endif %}
 

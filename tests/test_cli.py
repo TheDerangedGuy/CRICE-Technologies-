@@ -52,11 +52,15 @@ def test_cli_seed_demo_idempotent(db):
     assert rev is not None
     assert adm is not None
 
-    # Verify cases exist
+    # Verify cases exist across pipeline stages
     cases = db.query(Case).all()
-    assert len(cases) >= 2
+    assert len(cases) >= 3
+    stages = {c.stage for c in cases}
+    assert CaseStage.CORRELATION_AND_SCORING.value in stages
+    assert CaseStage.INDEPENDENT_REVIEW.value in stages
+    assert CaseStage.RELEASE_GATE.value in stages
+
     for c in cases:
-        assert c.stage == CaseStage.COLLECT.value
         assert c.client_kyc_verified is True
         assert c.msa_signed is True
         assert c.operator_id != c.reviewer_id
